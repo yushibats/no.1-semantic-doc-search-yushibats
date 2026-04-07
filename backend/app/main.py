@@ -50,7 +50,16 @@ if env_path.exists():
 # モデルのインポート
 from app.models.oci import OCISettings, OCISettingsResponse, OCIConnectionTestRequest, OCIConnectionTestResponse
 from app.models.document import DocumentUploadResponse, DocumentInfo, DocumentListResponse, DocumentDeleteRequest, DocumentDeleteResponse
-from app.models.search import SearchQuery, SearchResponse
+from app.models.search import (
+    SearchQuery,
+    SearchResponse,
+    TextIndexRequest,
+    TextIndexResponse,
+    TextSearchQuery,
+    HybridSearchQuery,
+    TextSearchResponse,
+    TextChunkSearchResult,
+)
 from app.models.database import (
     DatabaseSettings,
     DatabaseSettingsResponse,
@@ -78,8 +87,15 @@ from app.services.database_service import database_service
 from app.services.adb_service import adb_service
 from app.services.ai_copilot import get_copilot_service
 from app.services.image_vectorizer import image_vectorizer
+from app.services.text_rag_processor import TextRAGProcessor
 from app.services.parallel_processor import parallel_processor, JobManager
 from app.utils.auth_util import do_auth, get_username_from_connection_string
+
+text_rag_processor = TextRAGProcessor(
+    oci_service=oci_service,
+    database_service=database_service,
+    image_vectorizer=image_vectorizer,
+)
 
 # ========================================
 # アプリケーションライフサイクル
@@ -126,6 +142,8 @@ debug_mode = os.getenv("DEBUG", "False").lower() == "true"
 # UI機能トグル設定
 show_ai_assistant = os.getenv("SHOW_AI_ASSISTANT", "true").lower() == "true"
 show_search_tab = os.getenv("SHOW_SEARCH_TAB", "true").lower() == "true"
+enable_text_rag = os.getenv("ENABLE_TEXT_RAG", "false").lower() == "true"
+search_mode = os.getenv("SEARCH_MODE", "image")
 
 # セッション管理（メモリ内）
 # Token -> {username: str, expires_at: datetime}
@@ -1703,6 +1721,68 @@ async def search_documents(query: SearchQuery, request: Request):
     except Exception as e:
         logger.error(f"検索エラー: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/documents/index-text", response_model=TextIndexResponse)
+async def index_text_documents(request: TextIndexRequest):
+    """PDF/DOCXをテキスト索引化してTEXT_CHUNKSに保存"""
+    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
+        raise HTTPException(status_code=403, detail="Text RAG is disabled")
+
+    result = await asyncio.to_thread(
+        text_rag_processor.index_documents,
+        request.object_names,
+        request.max_chars or 1200,
+    )
+    return TextIndexResponse(**result)
+
+
+@app.post("/search/text", response_model=TextSearchResponse)
+async def search_text_documents(query: TextSearchQuery):
+    """TEXT_CHUNKSを対象にテキスト検索を実行"""
+    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
+        raise HTTPException(status_code=403, detail="Text RAG is disabled")
+
+    result = await asyncio.to_thread(
+        text_rag_processor.search_text,
+        query.query,
+        query.top_k or 10,
+        query.min_score if query.min_score is not None else 0.7,
+        query.filename_filter,
+    )
+    typed_results = [TextChunkSearchResult(**r) for r in result.get("results", [])]
+    return TextSearchResponse(
+        success=result.get("success", False),
+        query=result.get("query", query.query),
+        results=typed_results,
+        total=result.get("total", len(typed_results)),
+        message=result.get("message"),
+    )
+
+
+@app.post("/search/hybrid", response_model=TextSearchResponse)
+async def search_hybrid_documents(query: HybridSearchQuery):
+    """text vector + keyword のハイブリッド検索"""
+    if not enable_text_rag and search_mode not in ("hybrid", "all"):
+        raise HTTPException(status_code=403, detail="Hybrid search is disabled")
+
+    result = await asyncio.to_thread(
+        text_rag_processor.search_hybrid,
+        query.query,
+        query.top_k or 10,
+        query.min_score if query.min_score is not None else 0.7,
+        query.filename_filter,
+        query.vector_weight if query.vector_weight is not None else 0.7,
+        query.keyword_weight if query.keyword_weight is not None else 0.3,
+    )
+    typed_results = [TextChunkSearchResult(**r) for r in result.get("results", [])]
+    return TextSearchResponse(
+        success=result.get("success", False),
+        query=result.get("query", query.query),
+        results=typed_results,
+        total=result.get("total", len(typed_results)),
+        message=result.get("message"),
+    )
 
 
 @app.post("/search/image", response_model=SearchResponse)

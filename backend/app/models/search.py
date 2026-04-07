@@ -47,3 +47,57 @@ class SearchResponse(BaseModel):
     total_files: int  # マッチしたファイル数
     total_images: int  # マッチした画像数
     processing_time: float  # 秒
+
+
+class TextIndexRequest(BaseModel):
+    """テキスト索引化リクエスト"""
+    object_names: List[str]
+    max_chars: Optional[int] = 1200
+
+
+class TextSearchQuery(BaseModel):
+    """テキスト検索クエリ"""
+    query: str
+    top_k: Optional[int] = 10
+    min_score: Optional[float] = 0.7
+    filename_filter: Optional[str] = None
+
+
+class HybridSearchQuery(TextSearchQuery):
+    """ハイブリッド検索クエリ"""
+    vector_weight: Optional[float] = 0.7
+    keyword_weight: Optional[float] = 0.3
+
+
+class TextChunkSearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_id: int
+    bucket: Optional[str] = None
+    object_name: str
+    original_filename: Optional[str] = None
+    chunk_index: int
+    chunk_text: str
+    char_count: Optional[int] = None
+    vector_distance: Optional[float] = None
+    vector_score: Optional[float] = None
+    hybrid_score: Optional[float] = None
+    scores: Optional[dict] = None
+
+
+class TextSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: str
+    results: List[TextChunkSearchResult]
+    total: int
+    message: Optional[str] = None
+
+
+class TextIndexResponse(BaseModel):
+    success: bool
+    total: int
+    success_count: int
+    failed_count: int
+    results: List[dict]
