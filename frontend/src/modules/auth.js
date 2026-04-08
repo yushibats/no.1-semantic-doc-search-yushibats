@@ -93,6 +93,8 @@ export async function loadConfig() {
       // appStateに設定（oci.js等のモジュールから参照されるため）
       appState.set('debugMode', config.debug);
       appState.set('requireLogin', config.require_login);
+      appState.set('enableTextRag', !!config.enable_text_rag);
+      appState.set('searchMode', config.search_mode || 'image');
       appState.set('apiBase', API_BASE);
       
       // UI機能トグルを適用

@@ -346,7 +346,9 @@ def get_config():
         "debug": debug_mode,
         "require_login": not debug_mode,
         "show_ai_assistant": show_ai_assistant,
-        "show_search_tab": show_search_tab
+        "show_search_tab": show_search_tab,
+        "enable_text_rag": enable_text_rag,
+        "search_mode": search_mode,
     }
 
 @app.post("/login")

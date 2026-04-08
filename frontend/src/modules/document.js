@@ -298,6 +298,9 @@ export function displayOciObjectsList(data) {
   const hasSelection = selectedOciObjects.length > 0;
   const canSelectAction = !isProcessing; // 選択操作は処理中以外は常に可能
   const canExecuteAction = hasSelection; // 実行操作は選択がある場合のみ可能（処理中でもボタンは活性化）
+  const enableTextRag = appState.get('enableTextRag');
+  const searchMode = appState.get('searchMode') || 'image';
+  const canUseTextIndex = !!enableTextRag || ['text', 'hybrid', 'all'].includes(searchMode);
   
   // 選択ボタンHTML
   const selectionButtonsHtml = `
@@ -351,10 +354,10 @@ export function displayOciObjectsList(data) {
         ベクトル化 (${selectedOciObjects.length}件)
       </button>
       <button 
-        class="apex-button-secondary px-4 py-2 ${canExecuteAction ? '' : 'opacity-40 cursor-not-allowed'}" 
+        class="apex-button-secondary px-4 py-2 ${(canExecuteAction && canUseTextIndex) ? '' : 'opacity-40 cursor-not-allowed'}" 
         onclick="window.ociModule.indexTextSelected()" 
-        ${canExecuteAction ? '' : 'disabled'}
-        title="${canExecuteAction ? `選択されたファイルをテキスト索引化（TEXT_CHUNKS）: ${selectedOciObjects.length}件` : '索引化するファイルを選択してください'}"
+        ${(canExecuteAction && canUseTextIndex) ? '' : 'disabled'}
+        title="${!canUseTextIndex ? 'テキスト索引化は現在の設定で無効です（ENABLE_TEXT_RAG または SEARCH_MODE を確認してください）' : (canExecuteAction ? `選択されたファイルをテキスト索引化（TEXT_CHUNKS）: ${selectedOciObjects.length}件` : '索引化するファイルを選択してください')}"
       >
         テキスト索引化 (${selectedOciObjects.length}件)
       </button>
@@ -1129,6 +1132,14 @@ export async function vectorizeSelectedOciObjects() {
  * @returns {Promise<void>}
  */
 export async function indexTextSelectedOciObjects() {
+  const enableTextRag = appState.get('enableTextRag');
+  const searchMode = appState.get('searchMode') || 'image';
+  const canUseTextIndex = !!enableTextRag || ['text', 'hybrid', 'all'].includes(searchMode);
+  if (!canUseTextIndex) {
+    utilsShowToast('テキスト索引化は現在の設定で無効です（ENABLE_TEXT_RAG / SEARCH_MODE を確認してください）', 'warning');
+    return;
+  }
+
   const selectedOciObjects = getSelectedOciObjects();
 
   if (selectedOciObjects.length === 0) {

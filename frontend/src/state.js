@@ -122,6 +122,8 @@ export const appState = new StateManager({
   loginUser: localStorage.getItem('loginUser'),
   debugMode: false,
   requireLogin: true,  // 初期値はtrue、loadConfig()でバックエンド設定に更新
+  enableTextRag: false,
+  searchMode: 'image',
   
   // ファイル管理
   selectedFile: null,
