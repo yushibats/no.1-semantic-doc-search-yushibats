@@ -57,6 +57,21 @@ function hasMoreTextContent(text = '', maxLines = 5, maxChars = 260) {
   return lineCount > maxLines || normalized.length > maxChars;
 }
 
+function showResultTextModal(title, text) {
+  if (window.UIComponents?.showModal) {
+    window.UIComponents.showModal({
+      title: title || 'テキスト内容',
+      content: `
+        <div class="search-result-text-modal-body">${safeText(text || '（テキストなし）')}</div>
+      `,
+      size: 'lg'
+    });
+    return;
+  }
+
+  window.alert(text || '（テキストなし）');
+}
+
 function inferTextRelatedPageNo(result) {
   if (typeof result?.page_no === 'number') return result.page_no;
   if (typeof result?.page_number === 'number') return result.page_number;
@@ -305,8 +320,6 @@ function renderResultCard(item, index, options = {}) {
   const compact = !!options.compact;
   const isImage = item.source_type === 'image';
   const fullText = item.content_excerpt || '（抜粋なし）';
-  const previewText = getTextPreviewByLines(fullText, 5);
-  const hasMoreText = hasMoreTextContent(fullText, 5, 260);
   const relatedImageUrls = Array.isArray(item.text_related_image_urls) ? item.text_related_image_urls : [];
   const relatedImageTitles = Array.isArray(item.text_related_image_titles) ? item.text_related_image_titles : [];
   const primaryRelatedImageUrl = relatedImageUrls[0] || '';
@@ -315,99 +328,71 @@ function renderResultCard(item, index, options = {}) {
     ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
 
+  const previewThumbUrl = isImage ? item.thumbnail_url : primaryRelatedImageUrl;
+
   const cardInner = `
-      <div class="card-body" style="padding: 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px;">
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+      <div class="card-body search-result-card-body">
+        <div class="search-result-thumb-column">
+          ${previewThumbUrl ? `
+            <div
+              class="image-card search-result-thumb-card"
+              onclick="${isImage ? `window.searchModule.openResultImageByIndex(${index})` : `window.searchModule.openTextRelatedImageByIndex(${index}, 0)`}"
+            >
+              <div class="search-result-thumb-aspect">
+                <img
+                  src="${safeText(previewThumbUrl)}"
+                  alt="preview"
+                  style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;"
+                  ${!isImage ? 'onerror="this.closest(\'.search-result-thumb-card\')?.classList.add(\'is-hidden\');"' : ''}
+                />
+              </div>
+            </div>
+          ` : `
+            <div class="search-result-thumb-empty">
+              <i class="far fa-image"></i>
+              <span>サムネイルなし</span>
+            </div>
+          `}
+        </div>
+
+        <div class="search-result-content-column">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(item.source_type || '-')}</span>
             <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
             ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
-          </div>
-          ${item.download_url ? `
-            <button
-              onclick="window.searchModule.openResultFileByIndex(${index})"
-              class="search-result-download-btn"
-              title="ファイルを開く"
-            >
-              <i class="fas fa-download"></i> 開く
-            </button>
-          ` : ''}
-        </div>
-
-        <div style="font-size: 14px; color: #1f2937; margin-bottom: 6px;"><i class="fas fa-file"></i> ${safeText(item.file_name || '-')}</div>
-        <div style="font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all;">${safeText(item.object_name || '-')}</div>
-        ${item.page_no ? `<div style="font-size: 12px; color: #334155; margin-bottom: 10px;"><i class="far fa-file-alt"></i> page: ${safeText(item.page_no)}</div>` : ''}
-
-        ${isImage && item.thumbnail_url ? `
-          <div
-            class="image-card"
-            onclick="window.searchModule.openResultImageByIndex(${index})"
-            style="max-width: 320px; border: 2px solid #e2e8f0; border-radius: 8px; overflow: hidden; cursor: pointer;"
-          >
-            <div class="search-result-image-aspect">
-              <img
-                src="${safeText(item.thumbnail_url)}"
-                alt="preview"
-                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;"
-              />
             </div>
-          </div>
-        ` : ''}
-
-        ${!isImage ? `
-          <div class="search-text-layout" style="margin-top: 10px;">
-            <div class="search-text-main">
-              ${hasMoreText ? `
-                <div id="searchTextContainer-${index}" class="search-text-content is-collapsed">
-                  <div
-                    id="searchTextExcerpt-${index}"
-                    class="search-text-snippet search-text-snippet-preview is-clickable"
-                    onclick="window.searchModule.toggleResultTextByIndex(${index})"
-                    title="クリックで全文表示 / 折りたたみ"
-                  >
-                    ${safeText(previewText)}
-                  </div>
-                  <div
-                    class="search-text-snippet search-text-snippet-full is-clickable"
-                    onclick="window.searchModule.toggleResultTextByIndex(${index})"
-                    title="クリックで全文表示 / 折りたたみ"
-                  >
-                    ${safeText(fullText)}
-                  </div>
-                </div>
-              ` : `
-                <div class="search-text-snippet">${safeText(fullText)}</div>
-              `}
-              ${hasMoreText ? `
+            <div class="search-result-card-actions">
+              ${!isImage ? `
                 <button
                   type="button"
-                  id="searchTextToggle-${index}"
-                  class="search-text-toggle-btn"
-                  onclick="window.searchModule.toggleResultTextByIndex(${index})"
-                  aria-expanded="false"
+                  class="search-text-popup-btn"
+                  onclick="window.searchModule.openResultTextModalByIndex(${index})"
                 >
-                  全文表示
+                  <i class="far fa-file-alt"></i> テキスト表示
+                </button>
+              ` : ''}
+              ${item.download_url ? `
+                <button
+                  onclick="window.searchModule.openResultFileByIndex(${index})"
+                  class="search-result-download-btn"
+                  title="ファイルを開く"
+                >
+                  <i class="fas fa-download"></i> 開く
                 </button>
               ` : ''}
             </div>
-
-            <div class="search-text-side">
-              <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;"><i class="far fa-image"></i> ページ画像</div>
-              ${primaryRelatedImageUrl ? `
-                <div class="image-card search-related-page-thumb" onclick="window.searchModule.openTextRelatedImageByIndex(${index}, 0)">
-                  <div class="search-related-page-thumb-aspect">
-                    <img
-                      src="${safeText(primaryRelatedImageUrl)}"
-                      alt="page-preview"
-                      onerror="this.closest('.search-related-page-thumb')?.remove();"
-                    />
-                  </div>
-                  <div class="search-related-page-thumb-title">${safeText(primaryRelatedImageTitle)}</div>
-                </div>
-              ` : `<div class="search-related-page-empty">該当ページ画像なし</div>`}
-            </div>
           </div>
-        ` : ''}
+
+          <div style="font-size: 14px; color: #1f2937; margin-bottom: 6px;"><i class="fas fa-file"></i> ${safeText(item.file_name || '-')}</div>
+          <div style="font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all;">${safeText(item.object_name || '-')}</div>
+          ${item.page_no ? `<div style="font-size: 12px; color: #334155; margin-bottom: 10px;"><i class="far fa-file-alt"></i> page: ${safeText(item.page_no)}</div>` : ''}
+          ${!isImage ? `
+            <div class="search-text-thumb-caption">
+              <i class="far fa-image"></i> ${safeText(primaryRelatedImageTitle)}
+            </div>
+          ` : ''}
+        </div>
       </div>
   `;
 
@@ -463,16 +448,19 @@ function renderDocumentGroupCard(group, groupIndex) {
 }
 
 export function toggleResultTextByIndex(resultIndex) {
-  const excerptEl = document.getElementById(`searchTextExcerpt-${resultIndex}`);
-  const textContainer = document.getElementById(`searchTextContainer-${resultIndex}`);
-  const toggleBtn = document.getElementById(`searchTextToggle-${resultIndex}`);
-  if (!excerptEl || !textContainer || !toggleBtn) return;
+  return openResultTextModalByIndex(resultIndex);
+}
 
-  const isCollapsed = textContainer.classList.contains('is-collapsed');
-  textContainer.classList.toggle('is-collapsed', !isCollapsed);
-  textContainer.classList.toggle('is-expanded', isCollapsed);
-  toggleBtn.textContent = isCollapsed ? '折りたたむ' : '全文表示';
-  toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+export function openResultTextModalByIndex(resultIndex) {
+  const resultData = window._searchResultsData;
+  const item = resultData?.results?.[resultIndex];
+  if (!item || item.source_type !== 'text') {
+    utilsShowToast('テキストデータが見つかりません', 'warning');
+    return;
+  }
+
+  const modalTitle = `${item.file_name || 'テキスト結果'}${item.page_no ? ` / page ${item.page_no}` : ''}`;
+  showResultTextModal(modalTitle, item.content_excerpt || '（抜粋なし）');
 }
 
 function updateResultsSummary(data, normalizedResults, mode, groupedResults = null) {
@@ -940,7 +928,8 @@ window.searchModule = {
   openResultImageByIndex,
   openResultFileByIndex,
   openTextRelatedImageByIndex,
-  toggleResultTextByIndex
+  toggleResultTextByIndex,
+  openResultTextModalByIndex
 };
 
 // デフォルトエクスポート
@@ -959,6 +948,7 @@ export default {
   openResultFileByIndex,
   openTextRelatedImageByIndex,
   toggleResultTextByIndex,
+  openResultTextModalByIndex,
   displaySearchResultsWithMode
 }
 
