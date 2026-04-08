@@ -329,6 +329,7 @@ function renderResultCard(item, index, options = {}) {
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
 
   const previewThumbUrl = isImage ? item.thumbnail_url : primaryRelatedImageUrl;
+  const pageLabel = item.page_no ? `ページ ${safeText(item.page_no)}` : '';
 
   const cardInner = `
       <div class="card-body search-result-card-body">
@@ -356,11 +357,12 @@ function renderResultCard(item, index, options = {}) {
         </div>
 
         <div class="search-result-content-column">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px;">
-            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <div class="search-result-entry-header">
+            <div class="search-result-entry-badges">
             <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(item.source_type || '-')}</span>
             <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
             ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
+            ${pageLabel ? `<span class="badge search-result-inline-stat-badge">${pageLabel}</span>` : ''}
             </div>
             <div class="search-result-card-actions">
               ${!isImage ? `
@@ -372,21 +374,9 @@ function renderResultCard(item, index, options = {}) {
                   <i class="far fa-file-alt"></i> テキスト表示
                 </button>
               ` : ''}
-              ${item.download_url ? `
-                <button
-                  onclick="window.searchModule.openResultFileByIndex(${index})"
-                  class="search-result-download-btn"
-                  title="ファイルを開く"
-                >
-                  <i class="fas fa-download"></i> 開く
-                </button>
-              ` : ''}
             </div>
           </div>
 
-          <div style="font-size: 14px; color: #1f2937; margin-bottom: 6px;"><i class="fas fa-file"></i> ${safeText(item.file_name || '-')}</div>
-          <div style="font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all;">${safeText(item.object_name || '-')}</div>
-          ${item.page_no ? `<div style="font-size: 12px; color: #334155; margin-bottom: 10px;"><i class="far fa-file-alt"></i> page: ${safeText(item.page_no)}</div>` : ''}
           ${!isImage ? `
             <div class="search-text-thumb-caption">
               <i class="far fa-image"></i> ${safeText(primaryRelatedImageTitle)}
@@ -404,7 +394,6 @@ function renderResultCard(item, index, options = {}) {
 }
 
 function renderDocumentGroupCard(group, groupIndex) {
-  const bestEntryIndex = group.entries?.[0]?.index;
   const sourceTypeLabel = group.source_types.length === 1
     ? group.source_types[0]
     : `mixed(${group.source_types.join(', ')})`;
@@ -425,15 +414,6 @@ function renderDocumentGroupCard(group, groupIndex) {
           ${group.best_distance !== null ? `<span class="badge search-result-stat-badge">距離: ${group.best_distance.toFixed(4)}</span>` : ''}
           <span class="badge search-result-stat-badge">件数: ${group.entries.length}</span>
           ${group.matched_pages_count > 0 ? `<span class="badge search-result-stat-badge">ページ: ${group.matched_pages_count}</span>` : ''}
-          ${typeof bestEntryIndex === 'number' ? `
-            <button
-              onclick="window.searchModule.openResultFileByIndex(${bestEntryIndex})"
-              class="search-result-download-btn"
-              title="ファイルを開く"
-            >
-              <i class="fas fa-download"></i> 開く
-            </button>
-          ` : ''}
         </div>
       </div>
 
