@@ -17,7 +17,7 @@
  */
 
 import { appState } from '../state.js';
-import { apiCall as authApiCall, fetchWithAuth } from './auth.js';
+import { apiCall as authApiCall } from './auth.js';
 import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showToast as utilsShowToast, showImageModal as utilsShowImageModal } from './utils.js';
 
 // 検索画像の状態管理
@@ -202,34 +202,6 @@ function preloadImageUrl(url) {
   });
 }
 
-async function resolveImageUrlToObjectUrl(url) {
-  if (!url) return '';
-  try {
-    const response = await fetchWithAuth(url, { method: 'GET', timeout: 15000 });
-    if (!response.ok) return '';
-    const blob = await response.blob();
-    return URL.createObjectURL(blob);
-  } catch (_) {
-    return '';
-  }
-}
-
-function buildProxyImageUrl(url) {
-  if (!url) return '';
-  const safeUrl = getAuthenticatedImageUrl(url);
-  return `/ai/api/image-proxy?url=${encodeURIComponent(safeUrl)}`;
-}
-
-function revokePreviousBlobUrl(url) {
-  if (typeof url === 'string' && url.startsWith('blob:')) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch (_) {
-      // noop
-    }
-  }
-}
-
 async function resolveValidImageCandidates(urls = [], titles = []) {
   const checks = await Promise.all((urls || []).map(url => preloadImageUrl(url)));
   const validUrls = [];
@@ -250,10 +222,9 @@ function normalizeImageFileResultsToItems(fileResults = []) {
     const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
     const fileLevelPreviewUrl = fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : '';
 
-    const previewUrls = matchedImages.map(img => {
-      const originalUrl = img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name);
-      return buildProxyImageUrl(originalUrl);
-    });
+    const previewUrls = matchedImages.map(img => (
+      img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)
+    ));
     const previewTitles = matchedImages.map(img => {
       const score = typeof img.vector_distance === 'number' ? (1 - img.vector_distance) * 100 : null;
       return `ページ ${img.page_number ?? '-'}${score !== null ? ` - マッチ度: ${score.toFixed(1)}%` : ''}${typeof img.vector_distance === 'number' ? ` | 距離: ${img.vector_distance.toFixed(4)}` : ''}`;
@@ -272,7 +243,7 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
-        thumbnail_url: buildProxyImageUrl(fileLevelPreviewUrl || (img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name))),
+        thumbnail_url: fileLevelPreviewUrl || (img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)),
         download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
         preview_urls: previewUrls,
         preview_titles: previewTitles,
@@ -316,8 +287,8 @@ function normalizeSearchResults(data, mode) {
       : (result.page_no ?? result.page_number ?? null);
     const contentExcerpt = result.content_excerpt || result.chunk_text || '';
     const imageUrl = result.url
-      ? buildProxyImageUrl(getAuthenticatedImageUrl(result.url))
-      : (result.bucket && result.object_name ? buildProxyImageUrl(getAuthenticatedImageUrl(result.bucket, result.object_name)) : '');
+      ? getAuthenticatedImageUrl(result.url)
+      : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : '');
     const textRelatedPreview = sourceType === 'text' ? buildRelatedImagePreview({
       object_name: result.object_name,
       bucket: result.bucket,
@@ -817,22 +788,6 @@ export function displaySearchResultsWithMode(data, options = {}) {
     results: normalizedResults
   };
 
-  if (mode === 'image') {
-    normalizedResults.forEach(async (item, index) => {
-      if (item?.source_type !== 'image' || !item?.thumbnail_url) return;
-      const originalThumbnailUrl = item.thumbnail_url;
-      const blobUrl = await resolveImageUrlToObjectUrl(item.thumbnail_url);
-      if (!blobUrl) return;
-      revokePreviousBlobUrl(item.thumbnail_url);
-      item.thumbnail_url = blobUrl;
-      const thumbs = document.querySelectorAll('#searchResultsList .search-result-thumb-card img');
-      const targetImg = thumbs[index];
-      if (targetImg) {
-        targetImg.src = blobUrl;
-        targetImg.dataset.fullImageUrl = originalThumbnailUrl;
-      }
-    });
-  }
 }
 
 /**
@@ -851,8 +806,7 @@ export function openResultImageByIndex(resultIndex) {
     ? item.preview_titles
     : [`${item.file_name || '画像'}${item.page_no ? ` - ページ ${item.page_no}` : ''}`];
   const selectedIndex = typeof item.preview_index === 'number' ? item.preview_index : 0;
-  const displayUrl = item.thumbnail_url || urls[selectedIndex];
-  utilsShowImageModal(displayUrl, titles[selectedIndex], urls, selectedIndex, titles);
+  utilsShowImageModal(urls[selectedIndex], titles[selectedIndex], urls, selectedIndex, titles);
 }
 
 /**

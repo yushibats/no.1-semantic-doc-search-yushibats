@@ -207,6 +207,14 @@ def validate_temp_token(temp_token: str) -> bool:
     
     return True
 
+def build_public_api_base_url(request: Request) -> str:
+    """フロントエンドから到達可能な公開APIベースURL(/ai/api)を構築する"""
+    forwarded_proto = request.headers.get('X-Forwarded-Proto')
+    forwarded_host = request.headers.get('X-Forwarded-Host')
+    host = forwarded_host or request.headers.get('Host', request.url.netloc)
+    scheme = forwarded_proto or request.url.scheme
+    return f"{scheme}://{host}/ai/api"
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -1628,13 +1636,8 @@ async def search_documents(query: SearchQuery, request: Request):
         from app.models.search import FileSearchResult, ImageSearchResult
         from urllib.parse import quote
         
-        # ベースURLをリクエストから取得(絶対URL生成用)
-        # X-Forwarded-* ヘッダーを優先(nginxプロキシ対応)
-        scheme = request.headers.get('X-Forwarded-Proto', request.url.scheme)
-        host = request.headers.get('X-Forwarded-Host', request.headers.get('Host', request.url.netloc))
-        
-        # ベースURLを構築(外部APIはバックエンドに直接アクセスするため/ai/apiプレフィックス不要)
-        base_url = f"{scheme}://{host}"
+        # フロントエンドから到達可能な公開APIベースURLを構築
+        base_url = build_public_api_base_url(request)
         
         # 一時トークンを生成（短寿命、安全）
         # 元の認証情報(APIキーやセッショントークン)はURLに露出させない
@@ -1804,9 +1807,7 @@ async def search_hybrid_documents(query: HybridSearchQuery, request: Request):
     from collections import defaultdict
     from urllib.parse import quote
 
-    scheme = request.headers.get('X-Forwarded-Proto', request.url.scheme)
-    host = request.headers.get('X-Forwarded-Host', request.headers.get('Host', request.url.netloc))
-    base_url = f"{scheme}://{host}"
+    base_url = build_public_api_base_url(request)
     temp_token = generate_temp_token(source="hybrid_search")
     auth_query_param = f"?t={temp_token}"
 
@@ -2001,10 +2002,8 @@ async def search_documents_by_image(
         from app.models.search import FileSearchResult, ImageSearchResult
         from urllib.parse import quote
         
-        # ベースURLをリクエストから取得
-        scheme = request.headers.get('X-Forwarded-Proto', request.url.scheme)
-        host = request.headers.get('X-Forwarded-Host', request.headers.get('Host', request.url.netloc))
-        base_url = f"{scheme}://{host}"
+        # フロントエンドから到達可能な公開APIベースURLを構築
+        base_url = build_public_api_base_url(request)
         
         # 一時トークンを生成
         temp_token = generate_temp_token(source="image_search")
