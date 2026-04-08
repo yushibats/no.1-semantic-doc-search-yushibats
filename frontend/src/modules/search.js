@@ -364,10 +364,29 @@ export async function performImageSearch() {
  */
 function getAuthenticatedImageUrl(urlOrBucket, objectName) {
   const token = localStorage.getItem('loginToken');
+
+  const hasAuthLikeQuery = (url) => {
+    if (!url || !url.includes('?')) return false;
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return (
+        parsed.searchParams.has('t') ||
+        parsed.searchParams.has('token') ||
+        parsed.searchParams.has('api_key')
+      );
+    } catch (_) {
+      // URLパースに失敗しても、単純判定で既存クエリを尊重
+      return /[?&](t|token|api_key)=/.test(url);
+    }
+  };
   
   // 既に完全なURLが渡された場合(検索APIのurlフィールド)
   if (urlOrBucket && (urlOrBucket.startsWith('http://') || urlOrBucket.startsWith('https://') || urlOrBucket.startsWith('/'))) {
     const url = urlOrBucket;
+    // 検索APIが返す一時トークン(t)付きURL等はそのまま利用
+    if (hasAuthLikeQuery(url)) {
+      return url;
+    }
     if (token) {
       const separator = url.includes('?') ? '&' : '?';
       return `${url}${separator}token=${encodeURIComponent(token)}`;

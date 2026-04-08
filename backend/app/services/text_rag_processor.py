@@ -17,9 +17,6 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-from docx import Document
-from PyPDF2 import PdfReader
-
 logger = logging.getLogger(__name__)
 
 
@@ -30,19 +27,70 @@ class TextRAGProcessor:
         self.image_vectorizer = image_vectorizer
 
     @staticmethod
-    def _extract_text_from_pdf(file_bytes: bytes) -> str:
+    def _extract_pages_from_pdf(file_bytes: bytes) -> List[str]:
+        # 依存を遅延importして、PyPDF2未導入環境でもモジュール読込自体は失敗させない
+        from PyPDF2 import PdfReader
+
         reader = PdfReader(io.BytesIO(file_bytes))
         pages: List[str] = []
         for page in reader.pages:
-            pages.append(page.extract_text() or "")
+            text = (page.extract_text() or "").strip()
+            if text:
+                pages.append(text)
+        return pages
+
+    @staticmethod
+    def _extract_text_from_pdf(file_bytes: bytes) -> str:
+        pages = TextRAGProcessor._extract_pages_from_pdf(file_bytes)
         text = "\n\n".join(pages)
         return text.strip()
 
     @staticmethod
-    def _extract_text_from_docx(file_bytes: bytes) -> str:
+    def _extract_pages_from_docx(file_bytes: bytes) -> List[str]:
+        # 依存を遅延importして、docx未導入環境でもモジュール読込自体は失敗させない
+        from docx import Document
+
         doc = Document(io.BytesIO(file_bytes))
-        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
-        return "\n\n".join(paragraphs).strip()
+        pages: List[str] = []
+        current_parts: List[str] = []
+
+        for paragraph in doc.paragraphs:
+            text = (paragraph.text or "").strip()
+            if text:
+                current_parts.append(text)
+
+            has_page_break = False
+            for run in paragraph.runs:
+                run_el = run._element
+                ns = run_el.nsmap
+                # 明示的なページ区切り
+                for br in run_el.findall(".//w:br", ns):
+                    if br.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type") == "page":
+                        has_page_break = True
+                        break
+                # レンダリング由来の改ページ
+                if not has_page_break and run_el.findall(".//w:lastRenderedPageBreak", ns):
+                    has_page_break = True
+                if has_page_break:
+                    break
+
+            if has_page_break:
+                page_text = "\n\n".join(current_parts).strip()
+                if page_text:
+                    pages.append(page_text)
+                current_parts = []
+
+        # 最終ページ
+        page_text = "\n\n".join(current_parts).strip()
+        if page_text:
+            pages.append(page_text)
+
+        return pages
+
+    @staticmethod
+    def _extract_text_from_docx(file_bytes: bytes) -> str:
+        pages = TextRAGProcessor._extract_pages_from_docx(file_bytes)
+        return "\n\n".join(pages).strip()
 
     @staticmethod
     def _chunk_text_by_paragraphs(text: str, max_chars: int = 1200) -> List[str]:
@@ -76,6 +124,28 @@ class TextRAGProcessor:
 
         if current:
             chunks.append(current)
+
+        return chunks
+
+    @staticmethod
+    def _chunk_text_by_pages(page_texts: List[str], max_chars: int = 1200) -> List[str]:
+        """
+        ページ境界を跨がずにチャンク化する。
+        - ページテキストが max_chars 以下なら「1ページ=1チャンク」
+        - max_chars を超えるページはページ内でのみ分割
+        """
+        chunks: List[str] = []
+        for page_text in page_texts:
+            text = (page_text or "").strip()
+            if not text:
+                continue
+
+            if len(text) <= max_chars:
+                chunks.append(text)
+                continue
+
+            # 長すぎるページは、ページ内だけで分割（他ページとは結合しない）
+            chunks.extend(TextRAGProcessor._chunk_text_by_paragraphs(text, max_chars=max_chars))
 
         return chunks
 
@@ -133,16 +203,19 @@ class TextRAGProcessor:
                     continue
 
                 if ext == "pdf":
-                    extracted_text = self._extract_text_from_pdf(file_bytes)
+                    page_texts = self._extract_pages_from_pdf(file_bytes)
+                    extracted_text = "\n\n".join(page_texts).strip()
+                    chunks = self._chunk_text_by_pages(page_texts, max_chars=max_chars)
                 else:
-                    extracted_text = self._extract_text_from_docx(file_bytes)
+                    page_texts = self._extract_pages_from_docx(file_bytes)
+                    extracted_text = "\n\n".join(page_texts).strip()
+                    chunks = self._chunk_text_by_pages(page_texts, max_chars=max_chars)
 
                 if not extracted_text:
                     row["message"] = "テキスト抽出結果が空です（スキャンPDFの可能性）"
                     results.append(row)
                     continue
 
-                chunks = self._chunk_text_by_paragraphs(extracted_text, max_chars=max_chars)
                 if not chunks:
                     row["message"] = "チャンク生成結果が空です"
                     results.append(row)
