@@ -16,6 +16,7 @@
  * - エラーハンドリングとユーザー通知
  */
 
+import { appState } from '../state.js';
 import { apiCall as authApiCall, fetchWithAuth } from './auth.js';
 import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showToast as utilsShowToast, showImageModal as utilsShowImageModal } from './utils.js';
 
@@ -635,7 +636,7 @@ export async function performImageSearch() {
  */
 function getAuthenticatedImageUrl(urlOrBucket, objectName) {
   const token = localStorage.getItem('loginToken');
-  const apiBase = (window.appState?.get && window.appState.get('apiBase')) || '';
+  const apiBase = appState.get('apiBase') || '';
 
   const hasAuthLikeQuery = (url) => {
     if (!url || !url.includes('?')) return false;
