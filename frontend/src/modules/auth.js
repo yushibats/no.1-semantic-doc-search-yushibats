@@ -490,6 +490,11 @@ export async function fetchWithAuth(endpoint, options = {}) {
       throw new Error('リクエストがタイムアウトしました。データベースが起動していない可能性があります。');
     }
 
+    // ネットワーク未接続・プロキシ未到達時（ブラウザ標準の "Failed to fetch"）
+    if (error instanceof TypeError && /Failed to fetch/i.test(error.message || '')) {
+      throw new Error('APIに接続できませんでした（Failed to fetch）。バックエンド起動状態・ポート（8081）・Viteプロキシ設定を確認してください。');
+    }
+
     throw error;
   }
 }
