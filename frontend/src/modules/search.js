@@ -46,6 +46,51 @@ function inferSourceType(result) {
   return 'text';
 }
 
+function getTextPreviewByLines(text = '', maxLines = 5) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  return lines.slice(0, maxLines).join('\n');
+}
+
+function hasMoreTextLines(text = '', maxLines = 5) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  return normalized.split('\n').length > maxLines;
+}
+
+function inferTextRelatedPageNo(result) {
+  if (typeof result?.page_no === 'number') return result.page_no;
+  if (typeof result?.page_number === 'number') return result.page_number;
+  if (typeof result?.chunk_index === 'number') return result.chunk_index + 1;
+  return 1;
+}
+
+function buildRelatedImagePreview(itemLike) {
+  const objectName = itemLike?.object_name;
+  const bucket = itemLike?.bucket;
+  if (!objectName || objectName === '-') {
+    return { urls: [], titles: [] };
+  }
+
+  const pageNo = Math.max(1, parseInt(inferTextRelatedPageNo(itemLike), 10) || 1);
+  const page3 = String(pageNo).padStart(3, '0');
+  const page6 = String(pageNo).padStart(6, '0');
+  const basePath = objectName.replace(/\.[^.\/]+$/, '');
+
+  const objectNameCandidates = [
+    `${basePath}/page_${page3}.png`,
+    `${basePath}/page_${page6}.png`
+  ];
+
+  const urls = objectNameCandidates.map(name => (
+    bucket ? getAuthenticatedImageUrl(bucket, name) : ''
+  )).filter(Boolean);
+  const titles = objectNameCandidates.map((name, idx) => (
+    `${itemLike.file_name || '関連画像'} - page ${pageNo}${idx === 1 ? ' (6桁候補)' : ''}`
+  )).slice(0, urls.length);
+
+  return { urls, titles };
+}
+
 function normalizeImageFileResultsToItems(fileResults = []) {
   const items = [];
   fileResults.forEach((fileResult, fileIndex) => {
@@ -112,11 +157,20 @@ function normalizeSearchResults(data, mode) {
     const imageUrl = result.url
       ? getAuthenticatedImageUrl(result.url)
       : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : '');
+    const textRelatedPreview = sourceType === 'text' ? buildRelatedImagePreview({
+      object_name: result.object_name,
+      bucket: result.bucket,
+      file_name: fileName,
+      chunk_index: result.chunk_index,
+      page_no: result.page_no,
+      page_number: result.page_number
+    }) : { urls: [], titles: [] };
 
     normalized.push({
       source_type: sourceType,
       score,
       vector_distance: typeof result.vector_distance === 'number' ? result.vector_distance : null,
+      bucket: result.bucket || '',
       file_name: fileName,
       object_name: result.object_name || '-',
       page_no: pageNo,
@@ -127,6 +181,8 @@ function normalizeSearchResults(data, mode) {
         : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : ''),
       preview_urls: sourceType === 'image' && imageUrl ? [imageUrl] : [],
       preview_titles: sourceType === 'image' ? [`${fileName}${pageNo ? ` - ページ ${pageNo}` : ''}`] : [],
+      text_related_image_urls: textRelatedPreview.urls,
+      text_related_image_titles: textRelatedPreview.titles,
       preview_index: 0,
       _raw: result
     });
@@ -137,6 +193,10 @@ function normalizeSearchResults(data, mode) {
 
 function renderResultCard(item, index) {
   const isImage = item.source_type === 'image';
+  const previewText = getTextPreviewByLines(item.content_excerpt || '（抜粋なし）', 5);
+  const hasMoreText = hasMoreTextLines(item.content_excerpt || '', 5);
+  const relatedImageUrls = Array.isArray(item.text_related_image_urls) ? item.text_related_image_urls : [];
+  const relatedImageTitles = Array.isArray(item.text_related_image_titles) ? item.text_related_image_titles : [];
   const badgeClass = isImage
     ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
@@ -183,8 +243,32 @@ function renderResultCard(item, index) {
 
         ${!isImage ? `
           <div style="margin-top: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">
-            ${safeText(item.content_excerpt || '（抜粋なし）')}
+            ${safeText(previewText)}
           </div>
+          ${hasMoreText ? `
+            <details style="margin-top: 8px;">
+              <summary style="cursor: pointer; color: #2563eb; font-size: 12px; user-select: none;">全文表示</summary>
+              <div style="margin-top: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">
+                ${safeText(item.content_excerpt || '（抜粋なし）')}
+              </div>
+            </details>
+          ` : ''}
+
+          ${relatedImageUrls.length ? `
+            <div style="margin-top: 10px;">
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;"><i class="far fa-images"></i> 関連ページ画像</div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${relatedImageUrls.map((url, i) => `
+                  <div class="image-card" onclick="window.searchModule.openTextRelatedImageByIndex(${index}, ${i})" style="width: 120px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; cursor: pointer; background: #fff;">
+                    <div style="position: relative; width: 100%; padding-bottom: 70%; background: #f8fafc;">
+                      <img src="${safeText(url)}" alt="related-preview" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;" onerror="this.style.display='none';" />
+                    </div>
+                    <div style="padding: 4px 6px; font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${safeText(relatedImageTitles[i] || `page ${item.page_no || (item._raw?.chunk_index + 1) || 1}`)}</div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
         ` : ''}
       </div>
     </div>
@@ -534,6 +618,21 @@ export function openResultFileByIndex(resultIndex) {
 }
 
 /**
+ * テキスト検索結果に紐づくページ画像を開く
+ */
+export function openTextRelatedImageByIndex(resultIndex, imageIndex = 0) {
+  const resultData = window._searchResultsData;
+  const item = resultData?.results?.[resultIndex];
+  const urls = item?.text_related_image_urls || [];
+  const titles = item?.text_related_image_titles || [];
+  if (!urls.length || !urls[imageIndex]) {
+    utilsShowToast('関連画像が見つかりません', 'warning');
+    return;
+  }
+  utilsShowImageModal(urls[imageIndex], titles[imageIndex] || '関連ページ画像', urls, imageIndex, titles);
+}
+
+/**
  * 検索結果用画像モーダルを表示（ナビゲーション対応版）
  * @param {number} fileIndex - ファイルのインデックス
  * @param {number} imageIndex - 画像のインデックス
@@ -621,7 +720,8 @@ window.searchModule = {
   clearSearchImage,
   setRetrievalMode,
   openResultImageByIndex,
-  openResultFileByIndex
+  openResultFileByIndex,
+  openTextRelatedImageByIndex
 };
 
 // デフォルトエクスポート
@@ -638,6 +738,7 @@ export default {
   setRetrievalMode,
   openResultImageByIndex,
   openResultFileByIndex,
+  openTextRelatedImageByIndex,
   displaySearchResultsWithMode
 }
 

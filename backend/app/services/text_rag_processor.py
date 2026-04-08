@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class TextRAGProcessor:
+    EMPTY_PAGE_PLACEHOLDER = "（このページは画像主体のため本文テキストを抽出できませんでした）"
+
     def __init__(self, oci_service, database_service, image_vectorizer):
         self.oci_service = oci_service
         self.database_service = database_service
@@ -35,8 +37,8 @@ class TextRAGProcessor:
         pages: List[str] = []
         for page in reader.pages:
             text = (page.extract_text() or "").strip()
-            if text:
-                pages.append(text)
+            # 空ページも保持してページ数との対応を維持する
+            pages.append(text)
         return pages
 
     @staticmethod
@@ -135,9 +137,11 @@ class TextRAGProcessor:
         - max_chars を超えるページはページ内でのみ分割
         """
         chunks: List[str] = []
-        for page_text in page_texts:
+        for page_no, page_text in enumerate(page_texts, start=1):
             text = (page_text or "").strip()
             if not text:
+                # 空ページも1ページ=1レコードで保持
+                chunks.append(f"{TextRAGProcessor.EMPTY_PAGE_PLACEHOLDER} [page:{page_no}]")
                 continue
 
             if len(text) <= max_chars:
@@ -211,8 +215,8 @@ class TextRAGProcessor:
                     extracted_text = "\n\n".join(page_texts).strip()
                     chunks = self._chunk_text_by_pages(page_texts, max_chars=max_chars)
 
-                if not extracted_text:
-                    row["message"] = "テキスト抽出結果が空です（スキャンPDFの可能性）"
+                if not page_texts:
+                    row["message"] = "ページテキスト抽出に失敗しました"
                     results.append(row)
                     continue
 
