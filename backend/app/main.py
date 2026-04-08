@@ -715,11 +715,17 @@ async def list_oci_objects(
         
         # ベクトル化状態を一括取得（ファイルタイプのみ）
         vectorization_status = {}
+        text_index_status = {}
         if file_object_names:
             try:
                 vectorization_status = await asyncio.to_thread(image_vectorizer.get_vectorization_status, bucket_name, file_object_names)
             except Exception as e:
                 logger.warning(f"ベクトル化状態取得エラー: {e}")
+
+            try:
+                text_index_status = await asyncio.to_thread(database_service.get_text_index_status, bucket_name, file_object_names)
+            except Exception as e:
+                logger.warning(f"テキスト索引化状態取得エラー: {e}")
         
         # 最適化: 状態付与を効率化
         for obj in all_objects:
@@ -731,9 +737,11 @@ async def list_oci_objects(
                 # フォルダとページ画像は状態を表示しない
                 obj["has_page_images"] = None
                 obj["has_embeddings"] = None
+                obj["has_text_index"] = None
             else:
                 obj["has_page_images"] = has_page_images_for_file(obj_name)
                 obj["has_embeddings"] = vectorization_status.get(obj_name, False)
+                obj["has_text_index"] = text_index_status.get(obj_name, False)
         
         # 最適化: リスト内包表記でフィルタリング
         file_objects = [

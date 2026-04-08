@@ -1720,6 +1720,49 @@ class DatabaseService:
             logger.error(f"TEXT_CHUNKS保存エラー: {e}", exc_info=True)
             return {"success": False, "message": str(e)}
 
+    def get_text_index_status(self, bucket: str, object_names: List[str]) -> Dict[str, bool]:
+        """対象ファイルのテキスト索引化状態（TEXT_CHUNKS存在有無）を取得"""
+        result = {name: False for name in object_names}
+
+        if not object_names:
+            return result
+
+        try:
+            if not ORACLEDB_AVAILABLE or not self._ensure_pool_initialized():
+                return result
+
+            placeholders = ", ".join([f":obj_{i}" for i in range(len(object_names))])
+            sql = f"""
+                SELECT OBJECT_NAME, COUNT(*) AS chunk_count
+                FROM TEXT_CHUNKS
+                WHERE BUCKET = :bucket
+                  AND OBJECT_NAME IN ({placeholders})
+                GROUP BY OBJECT_NAME
+            """
+
+            params: Dict[str, Any] = {"bucket": bucket}
+            for i, name in enumerate(object_names):
+                params[f"obj_{i}"] = name
+
+            with self.pool_manager.acquire_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    for row in cursor.fetchall():
+                        object_name = row[0]
+                        chunk_count = row[1] or 0
+                        result[object_name] = chunk_count > 0
+
+            return result
+
+        except Exception as e:
+            # TEXT_CHUNKSテーブル未作成時は未索引化として扱う
+            if "ORA-00942" in str(e):
+                logger.info("TEXT_CHUNKSテーブルが未作成のため、テキスト索引化状態はすべて未実行として扱います")
+                return result
+
+            logger.error(f"テキスト索引化状態取得エラー: {e}", exc_info=True)
+            return result
+
     def search_text_chunks_by_vector(
         self,
         query_embedding,

@@ -439,6 +439,7 @@ export function displayOciObjectsList(data) {
               <th>作成日時</th>
               <th style="text-align: center;" class="hidden">ページ画像化</th>
               <th style="text-align: center;">ベクトル化</th>
+              <th style="text-align: center;">索引化</th>
             </tr>
           </thead>
           <tbody>
@@ -502,6 +503,12 @@ function generateObjectRow(obj, allOciObjects, selectedOciObjects, ociObjectsBat
   const embeddingsStatusHtml = (isPageImage || hasEmbeddings == null) ? '' :
     (hasEmbeddings ? '<span class="badge badge-success">完了</span>' : 
     '<span class="badge badge-neutral">未実行</span>');
+
+  // テキスト索引化状態（ページ画像の場合は空表示）
+  const hasTextIndex = obj.has_text_index;
+  const textIndexStatusHtml = (isPageImage || hasTextIndex == null) ? '' :
+    (hasTextIndex ? '<span class="badge badge-success">完了</span>' :
+    '<span class="badge badge-neutral">未実行</span>');
   
   return `
     <tr>
@@ -522,6 +529,7 @@ function generateObjectRow(obj, allOciObjects, selectedOciObjects, ociObjectsBat
       <td>${obj.time_created || '-'}</td>
       <td style="text-align: center;" class="hidden">${pageImagesStatusHtml}</td>
       <td style="text-align: center;">${embeddingsStatusHtml}</td>
+      <td style="text-align: center;">${textIndexStatusHtml}</td>
     </tr>
   `;
 }
