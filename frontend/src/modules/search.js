@@ -214,6 +214,12 @@ async function resolveImageUrlToObjectUrl(url) {
   }
 }
 
+function buildProxyImageUrl(url) {
+  if (!url) return '';
+  const safeUrl = getAuthenticatedImageUrl(url);
+  return `/ai/api/image-proxy?url=${encodeURIComponent(safeUrl)}`;
+}
+
 function revokePreviousBlobUrl(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) {
     try {
@@ -244,9 +250,10 @@ function normalizeImageFileResultsToItems(fileResults = []) {
     const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
     const fileLevelPreviewUrl = fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : '';
 
-    const previewUrls = matchedImages.map(img => (
-      img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)
-    ));
+    const previewUrls = matchedImages.map(img => {
+      const originalUrl = img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name);
+      return buildProxyImageUrl(originalUrl);
+    });
     const previewTitles = matchedImages.map(img => {
       const score = typeof img.vector_distance === 'number' ? (1 - img.vector_distance) * 100 : null;
       return `ページ ${img.page_number ?? '-'}${score !== null ? ` - マッチ度: ${score.toFixed(1)}%` : ''}${typeof img.vector_distance === 'number' ? ` | 距離: ${img.vector_distance.toFixed(4)}` : ''}`;
@@ -265,7 +272,7 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
-        thumbnail_url: fileLevelPreviewUrl || (img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)),
+        thumbnail_url: buildProxyImageUrl(fileLevelPreviewUrl || (img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name))),
         download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
         preview_urls: previewUrls,
         preview_titles: previewTitles,
@@ -309,8 +316,8 @@ function normalizeSearchResults(data, mode) {
       : (result.page_no ?? result.page_number ?? null);
     const contentExcerpt = result.content_excerpt || result.chunk_text || '';
     const imageUrl = result.url
-      ? getAuthenticatedImageUrl(result.url)
-      : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : '');
+      ? buildProxyImageUrl(getAuthenticatedImageUrl(result.url))
+      : (result.bucket && result.object_name ? buildProxyImageUrl(getAuthenticatedImageUrl(result.bucket, result.object_name)) : '');
     const textRelatedPreview = sourceType === 'text' ? buildRelatedImagePreview({
       object_name: result.object_name,
       bucket: result.bucket,
