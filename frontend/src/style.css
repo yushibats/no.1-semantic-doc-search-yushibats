@@ -487,6 +487,21 @@ button .fas,button .far,a .fas,a .far{margin-right:4px}
 .search-result-image-info{padding:12px;background:white;border-top:1px solid #e2e8f0}
 .search-result-image-title{font-size:13px;font-weight:600;color:#334155;margin-bottom:4px}
 .search-result-image-similarity{font-size:11px;color:#64748b}
+.search-result-inline-stat-badge{background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;font-size:12px;padding:4px 10px}
+
+.search-doc-group-card{margin-bottom:24px;border:2px solid #1a365d;overflow:hidden}
+.search-doc-group-header{background:linear-gradient(135deg,#1a365d 0%,#0f2847 100%);color:#fff;padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.search-doc-group-header-main{min-width:0;flex:1}
+.search-doc-group-title-row{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700;line-height:1.3;word-break:break-word}
+.search-doc-rank-badge{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;border-radius:9999px;background:rgba(255,255,255,.2);color:#fff;font-size:15px;font-weight:700;padding:0 8px}
+.search-doc-group-path{margin-top:6px;font-size:12px;opacity:.92;word-break:break-all}
+.search-doc-group-stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.search-doc-group-stats .search-result-stat-badge{background:rgba(255,255,255,.22);color:#fff;border:1px solid rgba(255,255,255,.32)}
+.search-doc-group-body{padding:12px;background:#f8fafc}
+.search-doc-group-body-title{font-weight:600;margin-bottom:10px;color:#334155;font-size:14px}
+.search-doc-group-entries{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.search-result-entry{background:#fff;border:1px solid #dbe3ef;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.06);overflow:hidden}
+.search-result-entry .card-body{border-left:3px solid #1a365d}
 
 .search-text-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,1fr);gap:14px;align-items:start}
 .search-text-main{min-width:0}
@@ -506,6 +521,7 @@ button .fas,button .far,a .fas,a .far{margin-right:4px}
 
 @media (max-width: 900px){
   .search-text-layout{grid-template-columns:1fr}
+  .search-doc-group-entries{grid-template-columns:1fr}
 }
 
 /* ========================================

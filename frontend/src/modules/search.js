@@ -24,9 +24,9 @@ let selectedSearchImage = null;
 let currentSearchType = 'text'; // 'text' or 'image'
 let currentRetrievalMode = 'image'; // 'image' | 'text' | 'hybrid'
 
-function formatScore(score) {
+function formatMatchPercent(score) {
   if (typeof score !== 'number' || Number.isNaN(score)) return '-';
-  return score.toFixed(4);
+  return `${(score * 100).toFixed(1)}%`;
 }
 
 function safeText(text = '') {
@@ -62,6 +62,88 @@ function inferTextRelatedPageNo(result) {
   if (typeof result?.page_number === 'number') return result.page_number;
   if (typeof result?.chunk_index === 'number') return result.chunk_index + 1;
   return 1;
+}
+
+function getDocumentGroupKey(item) {
+  const bucket = item?.bucket || '';
+  const objectName = item?.object_name || '';
+  const normalizedObjectName = objectName.replace(/\/page_(\d{3}|\d{6})\.png$/i, '');
+  const fallbackName = item?.file_name || objectName || '-';
+  return `${bucket}::${normalizedObjectName || fallbackName}`;
+}
+
+function compareResultItems(a, b) {
+  const aDistance = typeof a?.vector_distance === 'number' ? a.vector_distance : Number.POSITIVE_INFINITY;
+  const bDistance = typeof b?.vector_distance === 'number' ? b.vector_distance : Number.POSITIVE_INFINITY;
+  if (aDistance !== bDistance) return aDistance - bDistance;
+
+  const aScore = typeof a?.score === 'number' ? a.score : Number.NEGATIVE_INFINITY;
+  const bScore = typeof b?.score === 'number' ? b.score : Number.NEGATIVE_INFINITY;
+  if (aScore !== bScore) return bScore - aScore;
+
+  const aPage = typeof a?.page_no === 'number' ? a.page_no : Number.POSITIVE_INFINITY;
+  const bPage = typeof b?.page_no === 'number' ? b.page_no : Number.POSITIVE_INFINITY;
+  return aPage - bPage;
+}
+
+function groupResultsByDocument(normalizedResults = []) {
+  const groupsMap = new Map();
+
+  normalizedResults.forEach((item, index) => {
+    const key = getDocumentGroupKey(item);
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, {
+        key,
+        file_name: item.file_name || '-',
+        object_name: item.object_name || '-',
+        bucket: item.bucket || '',
+        download_url: item.download_url || '',
+        entries: []
+      });
+    }
+
+    const group = groupsMap.get(key);
+    if (!group.download_url && item.download_url) {
+      group.download_url = item.download_url;
+    }
+    if ((!group.file_name || group.file_name === '-') && item.file_name) {
+      group.file_name = item.file_name;
+    }
+    if ((!group.object_name || group.object_name === '-') && item.object_name) {
+      group.object_name = item.object_name;
+    }
+
+    group.entries.push({ index, item });
+  });
+
+  const groups = Array.from(groupsMap.values()).map((group) => {
+    const sortedEntries = [...group.entries].sort((a, b) => compareResultItems(a.item, b.item));
+    const scores = sortedEntries.map(e => e.item.score).filter(v => typeof v === 'number' && !Number.isNaN(v));
+    const distances = sortedEntries.map(e => e.item.vector_distance).filter(v => typeof v === 'number' && !Number.isNaN(v));
+    const pages = sortedEntries
+      .map(e => e.item.page_no)
+      .filter(v => typeof v === 'number' && Number.isFinite(v));
+
+    return {
+      ...group,
+      entries: sortedEntries,
+      best_score: scores.length ? Math.max(...scores) : null,
+      best_distance: distances.length ? Math.min(...distances) : null,
+      matched_pages_count: new Set(pages).size,
+      source_types: Array.from(new Set(sortedEntries.map(e => e.item.source_type || '-')))
+    };
+  });
+
+  groups.sort((a, b) => {
+    const aScore = typeof a.best_score === 'number' ? a.best_score : Number.NEGATIVE_INFINITY;
+    const bScore = typeof b.best_score === 'number' ? b.best_score : Number.NEGATIVE_INFINITY;
+    if (aScore !== bScore) return bScore - aScore;
+    const aDist = typeof a.best_distance === 'number' ? a.best_distance : Number.POSITIVE_INFINITY;
+    const bDist = typeof b.best_distance === 'number' ? b.best_distance : Number.POSITIVE_INFINITY;
+    return aDist - bDist;
+  });
+
+  return groups;
 }
 
 function buildRelatedImagePreview(itemLike) {
@@ -178,7 +260,9 @@ function normalizeSearchResults(data, mode) {
       (typeof result.vector_distance === 'number' ? (1 - result.vector_distance) : null);
 
     const fileName = result.file_name || result.original_filename || (result.object_name || '').split('/').pop() || '-';
-    const pageNo = result.page_no ?? result.page_number ?? null;
+    const pageNo = sourceType === 'text'
+      ? inferTextRelatedPageNo(result)
+      : (result.page_no ?? result.page_number ?? null);
     const contentExcerpt = result.content_excerpt || result.chunk_text || '';
     const imageUrl = result.url
       ? getAuthenticatedImageUrl(result.url)
@@ -217,7 +301,8 @@ function normalizeSearchResults(data, mode) {
   return normalized;
 }
 
-function renderResultCard(item, index) {
+function renderResultCard(item, index, options = {}) {
+  const compact = !!options.compact;
   const isImage = item.source_type === 'image';
   const fullText = item.content_excerpt || '（抜粋なし）';
   const previewText = getTextPreviewByLines(fullText, 5);
@@ -230,14 +315,13 @@ function renderResultCard(item, index) {
     ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
 
-  return `
-    <div class="card search-result-card" style="margin-bottom: 12px;">
+  const cardInner = `
       <div class="card-body" style="padding: 16px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(item.source_type || '-')}</span>
-            <span class="badge search-result-stat-badge">score: ${formatScore(item.score)}</span>
-            ${item.vector_distance !== null ? `<span class="badge search-result-stat-badge">distance: ${item.vector_distance.toFixed(4)}</span>` : ''}
+            <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
+            ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
           </div>
           ${item.download_url ? `
             <button
@@ -325,6 +409,55 @@ function renderResultCard(item, index) {
           </div>
         ` : ''}
       </div>
+  `;
+
+  if (compact) {
+    return `<div class="search-result-entry">${cardInner}</div>`;
+  }
+
+  return `<div class="card search-result-card" style="margin-bottom: 12px;">${cardInner}</div>`;
+}
+
+function renderDocumentGroupCard(group, groupIndex) {
+  const bestEntryIndex = group.entries?.[0]?.index;
+  const sourceTypeLabel = group.source_types.length === 1
+    ? group.source_types[0]
+    : `mixed(${group.source_types.join(', ')})`;
+
+  return `
+    <div class="card search-doc-group-card">
+      <div class="search-doc-group-header">
+        <div class="search-doc-group-header-main">
+          <div class="search-doc-group-title-row">
+            <span class="search-doc-rank-badge">#${groupIndex + 1}</span>
+            <span><i class="fas fa-file"></i> ${safeText(group.file_name || '-')}</span>
+          </div>
+          <div class="search-doc-group-path">${safeText(group.object_name || '-')}</div>
+        </div>
+        <div class="search-doc-group-stats">
+          <span class="badge search-result-stat-badge">タイプ: ${safeText(sourceTypeLabel)}</span>
+          <span class="badge search-result-stat-badge">マッチ度: ${formatMatchPercent(group.best_score)}</span>
+          ${group.best_distance !== null ? `<span class="badge search-result-stat-badge">距離: ${group.best_distance.toFixed(4)}</span>` : ''}
+          <span class="badge search-result-stat-badge">件数: ${group.entries.length}</span>
+          ${group.matched_pages_count > 0 ? `<span class="badge search-result-stat-badge">ページ: ${group.matched_pages_count}</span>` : ''}
+          ${typeof bestEntryIndex === 'number' ? `
+            <button
+              onclick="window.searchModule.openResultFileByIndex(${bestEntryIndex})"
+              class="search-result-download-btn"
+              title="ファイルを開く"
+            >
+              <i class="fas fa-download"></i> 開く
+            </button>
+          ` : ''}
+        </div>
+      </div>
+
+      <div class="search-doc-group-body">
+        <div class="search-doc-group-body-title"><i class="far fa-images"></i> マッチした項目（距離が小さい順）</div>
+        <div class="search-doc-group-entries">
+          ${group.entries.map(({ item, index }) => renderResultCard(item, index, { compact: true })).join('')}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -342,7 +475,7 @@ export function toggleResultTextByIndex(resultIndex) {
   toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
 }
 
-function updateResultsSummary(data, normalizedResults, mode) {
+function updateResultsSummary(data, normalizedResults, mode, groupedResults = null) {
   const summarySpan = document.getElementById('searchResultsSummary');
   if (!summarySpan) return;
 
@@ -350,8 +483,9 @@ function updateResultsSummary(data, normalizedResults, mode) {
   const textCount = normalizedResults.filter(r => r.source_type === 'text').length;
   const processingTime = typeof data?.processing_time === 'number' ? data.processing_time.toFixed(2) : '-';
   const modeLabel = mode || currentRetrievalMode;
+  const docsCount = Array.isArray(groupedResults) ? groupedResults.length : 0;
 
-  summarySpan.textContent = `mode: ${modeLabel} / total: ${normalizedResults.length}件 (image: ${imageCount}, text: ${textCount}, ${processingTime}秒)`;
+  summarySpan.textContent = `mode: ${modeLabel} / docs: ${docsCount}件 / hits: ${normalizedResults.length}件 (image: ${imageCount}, text: ${textCount}, ${processingTime}秒)`;
 }
 
 /**
@@ -625,10 +759,11 @@ export function displaySearchResultsWithMode(data, options = {}) {
 
   const mode = options.mode || currentRetrievalMode || 'image';
   const normalizedResults = normalizeSearchResults(data, mode);
+  const groupedResults = groupResultsByDocument(normalizedResults);
 
   if (!normalizedResults.length) {
     resultsDiv.style.display = 'block';
-    updateResultsSummary(data, [], mode);
+    updateResultsSummary(data, [], mode, []);
     listDiv.innerHTML = `
       <div class="empty-state">
         <div class="empty-state-icon"><i class="fas fa-search" style="color: #94a3b8;"></i></div>
@@ -640,9 +775,9 @@ export function displaySearchResultsWithMode(data, options = {}) {
   }
   
   resultsDiv.style.display = 'block';
-  updateResultsSummary(data, normalizedResults, mode);
+  updateResultsSummary(data, normalizedResults, mode, groupedResults);
 
-  listDiv.innerHTML = normalizedResults.map((item, index) => renderResultCard(item, index)).join('');
+  listDiv.innerHTML = groupedResults.map((group, index) => renderDocumentGroupCard(group, index)).join('');
   
   // 検索結果データをグローバルに保存（画像モーダル用）
   window._searchResultsData = {
