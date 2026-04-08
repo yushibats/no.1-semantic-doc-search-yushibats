@@ -214,6 +214,16 @@ async function resolveImageUrlToObjectUrl(url) {
   }
 }
 
+function revokePreviousBlobUrl(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {
+      // noop
+    }
+  }
+}
+
 async function resolveValidImageCandidates(urls = [], titles = []) {
   const checks = await Promise.all((urls || []).map(url => preloadImageUrl(url)));
   const validUrls = [];
@@ -803,13 +813,16 @@ export function displaySearchResultsWithMode(data, options = {}) {
   if (mode === 'image') {
     normalizedResults.forEach(async (item, index) => {
       if (item?.source_type !== 'image' || !item?.thumbnail_url) return;
+      const originalThumbnailUrl = item.thumbnail_url;
       const blobUrl = await resolveImageUrlToObjectUrl(item.thumbnail_url);
       if (!blobUrl) return;
+      revokePreviousBlobUrl(item.thumbnail_url);
       item.thumbnail_url = blobUrl;
       const thumbs = document.querySelectorAll('#searchResultsList .search-result-thumb-card img');
       const targetImg = thumbs[index];
       if (targetImg) {
         targetImg.src = blobUrl;
+        targetImg.dataset.fullImageUrl = originalThumbnailUrl;
       }
     });
   }
@@ -831,7 +844,8 @@ export function openResultImageByIndex(resultIndex) {
     ? item.preview_titles
     : [`${item.file_name || '画像'}${item.page_no ? ` - ページ ${item.page_no}` : ''}`];
   const selectedIndex = typeof item.preview_index === 'number' ? item.preview_index : 0;
-  utilsShowImageModal(urls[selectedIndex], titles[selectedIndex], urls, selectedIndex, titles);
+  const displayUrl = item.thumbnail_url || urls[selectedIndex];
+  utilsShowImageModal(displayUrl, titles[selectedIndex], urls, selectedIndex, titles);
 }
 
 /**
