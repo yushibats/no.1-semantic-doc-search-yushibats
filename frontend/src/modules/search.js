@@ -645,12 +645,16 @@ function getAuthenticatedImageUrl(urlOrBucket, objectName) {
         return rawUrl;
       }
 
+      const normalizedPath = parsed.pathname.startsWith('/ai/')
+        ? parsed.pathname
+        : `/ai${parsed.pathname}`;
+
       if (apiBase) {
         const apiUrl = new URL(apiBase, window.location.origin);
-        return `${apiUrl.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+        return `${apiUrl.origin}${normalizedPath}${parsed.search}${parsed.hash}`;
       }
 
-      return `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      return `${window.location.origin}${normalizedPath}${parsed.search}${parsed.hash}`;
     } catch (_) {
       return rawUrl;
     }
