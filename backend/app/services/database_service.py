@@ -1651,6 +1651,7 @@ class DatabaseService:
                                 OBJECT_NAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
                                 ORIGINAL_FILENAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
                                 CHUNK_INDEX NUMBER,
+                                PAGE_NUMBER NUMBER,
                                 CHUNK_TEXT CLOB,
                                 CHAR_COUNT NUMBER,
                                 EMBEDDING VECTOR(1536, FLOAT32),
@@ -1665,6 +1666,13 @@ class DatabaseService:
                             ON TEXT_CHUNKS (BUCKET, OBJECT_NAME, CHUNK_INDEX)
                             """
                         )
+                    else:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'TEXT_CHUNKS' AND COLUMN_NAME = 'PAGE_NUMBER'"
+                        )
+                        has_page_number = cursor.fetchone()[0] > 0
+                        if not has_page_number:
+                            cursor.execute("ALTER TABLE TEXT_CHUNKS ADD PAGE_NUMBER NUMBER")
                         connection.commit()
                         return {"success": True, "message": "TEXT_CHUNKSテーブルを作成しました"}
 
@@ -1699,15 +1707,16 @@ class DatabaseService:
                         cursor.execute(
                             """
                             INSERT INTO TEXT_CHUNKS
-                            (BUCKET, OBJECT_NAME, ORIGINAL_FILENAME, CHUNK_INDEX, CHUNK_TEXT, CHAR_COUNT, EMBEDDING)
+                            (BUCKET, OBJECT_NAME, ORIGINAL_FILENAME, CHUNK_INDEX, PAGE_NUMBER, CHUNK_TEXT, CHAR_COUNT, EMBEDDING)
                             VALUES
-                            (:bucket, :object_name, :original_filename, :chunk_index, :chunk_text, :char_count, :embedding)
+                            (:bucket, :object_name, :original_filename, :chunk_index, :page_number, :chunk_text, :char_count, :embedding)
                             """,
                             {
                                 "bucket": bucket,
                                 "object_name": object_name,
                                 "original_filename": original_filename,
                                 "chunk_index": int(chunk["chunk_index"]),
+                                "page_number": int(chunk.get("page_number", 1)),
                                 "chunk_text": chunk["chunk_text"],
                                 "char_count": int(chunk["char_count"]),
                                 "embedding": embedding_array,
@@ -1788,6 +1797,7 @@ class DatabaseService:
                     tc.OBJECT_NAME,
                     tc.ORIGINAL_FILENAME,
                     tc.CHUNK_INDEX,
+                    tc.PAGE_NUMBER,
                     tc.CHUNK_TEXT,
                     tc.CHAR_COUNT,
                     VECTOR_DISTANCE(tc.EMBEDDING, :query_embedding, COSINE) AS vector_distance
@@ -1810,7 +1820,7 @@ class DatabaseService:
                 with connection.cursor() as cursor:
                     cursor.execute(sql, params)
                     for row in cursor.fetchall():
-                        chunk_text = row[5]
+                        chunk_text = row[6]
                         if hasattr(chunk_text, "read"):
                             chunk_text = chunk_text.read()
                         rows.append(
@@ -1820,9 +1830,10 @@ class DatabaseService:
                                 "object_name": row[2],
                                 "original_filename": row[3],
                                 "chunk_index": row[4],
+                                "page_number": row[5],
                                 "chunk_text": chunk_text,
-                                "char_count": row[6],
-                                "vector_distance": float(row[7]),
+                                "char_count": row[7],
+                                "vector_distance": float(row[8]),
                             }
                         )
             return rows
@@ -1865,6 +1876,7 @@ class DatabaseService:
                     tc.OBJECT_NAME,
                     tc.ORIGINAL_FILENAME,
                     tc.CHUNK_INDEX,
+                    tc.PAGE_NUMBER,
                     tc.CHUNK_TEXT,
                     tc.CHAR_COUNT
                 FROM TEXT_CHUNKS tc
@@ -1877,7 +1889,7 @@ class DatabaseService:
                 with connection.cursor() as cursor:
                     cursor.execute(sql, params)
                     for row in cursor.fetchall():
-                        chunk_text = row[5]
+                        chunk_text = row[6]
                         if hasattr(chunk_text, "read"):
                             chunk_text = chunk_text.read()
                         rows.append(
@@ -1887,8 +1899,9 @@ class DatabaseService:
                                 "object_name": row[2],
                                 "original_filename": row[3],
                                 "chunk_index": row[4],
+                                "page_number": row[5],
                                 "chunk_text": chunk_text,
-                                "char_count": row[6],
+                                "char_count": row[7],
                             }
                         )
             return rows

@@ -268,11 +268,13 @@ function normalizeSearchResults(data, mode) {
     }
 
     const sourceType = inferSourceType(result);
-    const score =
-      (typeof result.score === 'number' && result.score) ||
-      (typeof result.hybrid_score === 'number' && result.hybrid_score) ||
-      (typeof result.vector_score === 'number' && result.vector_score) ||
-      (typeof result.vector_distance === 'number' ? (1 - result.vector_distance) : null);
+    const scoreCandidates = [
+      result.score,
+      result.hybrid_score,
+      result.vector_score,
+      typeof result.vector_distance === 'number' ? (1 - result.vector_distance) : null,
+    ];
+    const score = scoreCandidates.find((value) => typeof value === 'number' && !Number.isNaN(value)) ?? null;
 
     const fileName = result.file_name || result.original_filename || (result.object_name || '').split('/').pop() || '-';
     const pageNo = sourceType === 'text'

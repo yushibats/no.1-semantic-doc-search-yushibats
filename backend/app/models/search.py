@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -77,12 +77,48 @@ class TextChunkSearchResult(BaseModel):
     object_name: str
     original_filename: Optional[str] = None
     chunk_index: int
+    page_number: Optional[int] = None
     chunk_text: str
     char_count: Optional[int] = None
     vector_distance: Optional[float] = None
     vector_score: Optional[float] = None
     hybrid_score: Optional[float] = None
     scores: Optional[dict] = None
+    source_type: Optional[str] = "text"
+    file_url: Optional[str] = None
+
+
+class HybridImageSearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source_type: str = "image"
+    file_id: int
+    bucket: str
+    object_name: str
+    original_filename: Optional[str] = None
+    file_size: Optional[int] = None
+    content_type: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    min_distance: float
+    matched_images: List[ImageSearchResult]
+    url: Optional[str] = None
+    hybrid_score: Optional[float] = None
+    scores: Optional[dict] = None
+
+
+HybridSearchResult = Union[TextChunkSearchResult, HybridImageSearchResult]
+
+
+class HybridSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: str
+    results: List[HybridSearchResult]
+    total: int
+    message: Optional[str] = None
+    processing_time: Optional[float] = None
+    weights: Optional[dict] = None
 
 
 class TextSearchResponse(BaseModel):

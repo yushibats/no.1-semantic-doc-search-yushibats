@@ -130,26 +130,28 @@ class TextRAGProcessor:
         return chunks
 
     @staticmethod
-    def _chunk_text_by_pages(page_texts: List[str], max_chars: int = 1200) -> List[str]:
+    def _chunk_text_by_pages(page_texts: List[str], max_chars: int = 1200) -> List[Dict[str, Any]]:
         """
         ページ境界を跨がずにチャンク化する。
         - ページテキストが max_chars 以下なら「1ページ=1チャンク」
         - max_chars を超えるページはページ内でのみ分割
         """
-        chunks: List[str] = []
+        chunks: List[Dict[str, Any]] = []
         for page_no, page_text in enumerate(page_texts, start=1):
             text = (page_text or "").strip()
             if not text:
                 # 空ページも1ページ=1レコードで保持
-                chunks.append(f"{TextRAGProcessor.EMPTY_PAGE_PLACEHOLDER} [page:{page_no}]")
+                placeholder = f"{TextRAGProcessor.EMPTY_PAGE_PLACEHOLDER} [page:{page_no}]"
+                chunks.append({"page_number": page_no, "chunk_text": placeholder})
                 continue
 
             if len(text) <= max_chars:
-                chunks.append(text)
+                chunks.append({"page_number": page_no, "chunk_text": text})
                 continue
 
             # 長すぎるページは、ページ内だけで分割（他ページとは結合しない）
-            chunks.extend(TextRAGProcessor._chunk_text_by_paragraphs(text, max_chars=max_chars))
+            for chunk_text in TextRAGProcessor._chunk_text_by_paragraphs(text, max_chars=max_chars):
+                chunks.append({"page_number": page_no, "chunk_text": chunk_text})
 
         return chunks
 
@@ -226,13 +228,15 @@ class TextRAGProcessor:
                     continue
 
                 chunk_rows: List[Dict[str, Any]] = []
-                for idx, chunk_text in enumerate(chunks):
+                for idx, chunk in enumerate(chunks):
+                    chunk_text = chunk["chunk_text"]
                     embedding = self.image_vectorizer.generate_text_embedding(chunk_text)
                     if embedding is None:
                         continue
                     chunk_rows.append(
                         {
                             "chunk_index": idx,
+                            "page_number": int(chunk["page_number"]),
                             "chunk_text": chunk_text,
                             "char_count": len(chunk_text),
                             "embedding": embedding,
@@ -300,6 +304,7 @@ class TextRAGProcessor:
                     "object_name": r.get("object_name"),
                     "original_filename": r.get("original_filename"),
                     "chunk_index": r.get("chunk_index"),
+                    "page_number": r.get("page_number"),
                     "chunk_text": r.get("chunk_text"),
                     "char_count": r.get("char_count"),
                     "vector_distance": vector_distance,
@@ -346,9 +351,11 @@ class TextRAGProcessor:
                 "object_name": row.get("object_name"),
                 "original_filename": row.get("original_filename"),
                 "chunk_index": row.get("chunk_index"),
+                "page_number": row.get("page_number"),
                 "chunk_text": row.get("chunk_text"),
                 "char_count": row.get("char_count"),
                 "vector_distance": vector_distance,
+                "source_type": "text",
                 "scores": {
                     "text_vector": vector_score,
                     "keyword": 0.0,
@@ -366,9 +373,11 @@ class TextRAGProcessor:
                     "object_name": row.get("object_name"),
                     "original_filename": row.get("original_filename"),
                     "chunk_index": row.get("chunk_index"),
+                    "page_number": row.get("page_number"),
                     "chunk_text": row.get("chunk_text"),
                     "char_count": row.get("char_count"),
                     "vector_distance": None,
+                    "source_type": "text",
                     "scores": {
                         "text_vector": 0.0,
                         "keyword": keyword_score,
