@@ -220,8 +220,6 @@ function normalizeImageFileResultsToItems(fileResults = []) {
   fileResults.forEach((fileResult, fileIndex) => {
     const originalFilename = fileResult.original_filename || (fileResult.object_name || '').split('/').pop() || '-';
     const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
-    const fileLevelPreviewUrl = fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : '';
-
     const previewUrls = matchedImages.map(img => (
       img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)
     ));
@@ -243,7 +241,7 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
-        thumbnail_url: fileLevelPreviewUrl || (img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)),
+        thumbnail_url: img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name),
         download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
         preview_urls: previewUrls,
         preview_titles: previewTitles,
