@@ -16,7 +16,7 @@
  * - エラーハンドリングとユーザー通知
  */
 
-import { apiCall as authApiCall } from './auth.js';
+import { apiCall as authApiCall, fetchWithAuth } from './auth.js';
 import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showToast as utilsShowToast, showImageModal as utilsShowImageModal } from './utils.js';
 
 // 検索画像の状態管理
@@ -199,6 +199,18 @@ function preloadImageUrl(url) {
     img.onerror = () => resolve(false);
     img.src = url;
   });
+}
+
+async function resolveImageUrlToObjectUrl(url) {
+  if (!url) return '';
+  try {
+    const response = await fetchWithAuth(url, { method: 'GET', timeout: 15000 });
+    if (!response.ok) return '';
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (_) {
+    return '';
+  }
 }
 
 async function resolveValidImageCandidates(urls = [], titles = []) {
@@ -763,6 +775,20 @@ export function displaySearchResultsWithMode(data, options = {}) {
     mode,
     results: normalizedResults
   };
+
+  if (mode === 'image') {
+    normalizedResults.forEach(async (item, index) => {
+      if (item?.source_type !== 'image' || !item?.thumbnail_url) return;
+      const blobUrl = await resolveImageUrlToObjectUrl(item.thumbnail_url);
+      if (!blobUrl) return;
+      item.thumbnail_url = blobUrl;
+      const thumbs = document.querySelectorAll('#searchResultsList .search-result-thumb-card img');
+      const targetImg = thumbs[index];
+      if (targetImg) {
+        targetImg.src = blobUrl;
+      }
+    });
+  }
 }
 
 /**
