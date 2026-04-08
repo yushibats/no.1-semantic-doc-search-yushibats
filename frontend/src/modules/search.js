@@ -48,13 +48,13 @@ function inferSourceType(result) {
 
 function getTextPreviewByLines(text = '', maxLines = 5) {
   const normalized = String(text || '').replace(/\r\n/g, '\n');
-  const lines = normalized.split('\n');
-  return lines.slice(0, maxLines).join('\n');
+  return normalized.split('\n').slice(0, maxLines).join('\n');
 }
 
-function hasMoreTextLines(text = '', maxLines = 5) {
+function hasMoreTextContent(text = '', maxLines = 5, maxChars = 260) {
   const normalized = String(text || '').replace(/\r\n/g, '\n');
-  return normalized.split('\n').length > maxLines;
+  const lineCount = normalized.split('\n').length;
+  return lineCount > maxLines || normalized.length > maxChars;
 }
 
 function inferTextRelatedPageNo(result) {
@@ -84,11 +84,37 @@ function buildRelatedImagePreview(itemLike) {
   const urls = objectNameCandidates.map(name => (
     bucket ? getAuthenticatedImageUrl(bucket, name) : ''
   )).filter(Boolean);
-  const titles = objectNameCandidates.map((name, idx) => (
-    `${itemLike.file_name || '関連画像'} - page ${pageNo}${idx === 1 ? ' (6桁候補)' : ''}`
+  const titles = objectNameCandidates.map(() => (
+    `${itemLike.file_name || '関連画像'} - page ${pageNo}`
   )).slice(0, urls.length);
 
   return { urls, titles };
+}
+
+function preloadImageUrl(url) {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve(false);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
+
+async function resolveValidImageCandidates(urls = [], titles = []) {
+  const checks = await Promise.all((urls || []).map(url => preloadImageUrl(url)));
+  const validUrls = [];
+  const validTitles = [];
+  checks.forEach((ok, i) => {
+    if (ok) {
+      validUrls.push(urls[i]);
+      validTitles.push(titles[i] || '関連ページ画像');
+    }
+  });
+  return { validUrls, validTitles };
 }
 
 function normalizeImageFileResultsToItems(fileResults = []) {
@@ -193,10 +219,13 @@ function normalizeSearchResults(data, mode) {
 
 function renderResultCard(item, index) {
   const isImage = item.source_type === 'image';
-  const previewText = getTextPreviewByLines(item.content_excerpt || '（抜粋なし）', 5);
-  const hasMoreText = hasMoreTextLines(item.content_excerpt || '', 5);
+  const fullText = item.content_excerpt || '（抜粋なし）';
+  const previewText = getTextPreviewByLines(fullText, 5);
+  const hasMoreText = hasMoreTextContent(fullText, 5, 260);
   const relatedImageUrls = Array.isArray(item.text_related_image_urls) ? item.text_related_image_urls : [];
   const relatedImageTitles = Array.isArray(item.text_related_image_titles) ? item.text_related_image_titles : [];
+  const primaryRelatedImageUrl = relatedImageUrls[0] || '';
+  const primaryRelatedImageTitle = relatedImageTitles[0] || `page ${item.page_no || (item._raw?.chunk_index + 1) || 1}`;
   const badgeClass = isImage
     ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
@@ -242,37 +271,75 @@ function renderResultCard(item, index) {
         ` : ''}
 
         ${!isImage ? `
-          <div style="margin-top: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">
-            ${safeText(previewText)}
-          </div>
-          ${hasMoreText ? `
-            <details style="margin-top: 8px;">
-              <summary style="cursor: pointer; color: #2563eb; font-size: 12px; user-select: none;">全文表示</summary>
-              <div style="margin-top: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">
-                ${safeText(item.content_excerpt || '（抜粋なし）')}
-              </div>
-            </details>
-          ` : ''}
-
-          ${relatedImageUrls.length ? `
-            <div style="margin-top: 10px;">
-              <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;"><i class="far fa-images"></i> 関連ページ画像</div>
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                ${relatedImageUrls.map((url, i) => `
-                  <div class="image-card" onclick="window.searchModule.openTextRelatedImageByIndex(${index}, ${i})" style="width: 120px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; cursor: pointer; background: #fff;">
-                    <div style="position: relative; width: 100%; padding-bottom: 70%; background: #f8fafc;">
-                      <img src="${safeText(url)}" alt="related-preview" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;" onerror="this.style.display='none';" />
-                    </div>
-                    <div style="padding: 4px 6px; font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${safeText(relatedImageTitles[i] || `page ${item.page_no || (item._raw?.chunk_index + 1) || 1}`)}</div>
+          <div class="search-text-layout" style="margin-top: 10px;">
+            <div class="search-text-main">
+              ${hasMoreText ? `
+                <div id="searchTextContainer-${index}" class="search-text-content is-collapsed">
+                  <div
+                    id="searchTextExcerpt-${index}"
+                    class="search-text-snippet search-text-snippet-preview is-clickable"
+                    onclick="window.searchModule.toggleResultTextByIndex(${index})"
+                    title="クリックで全文表示 / 折りたたみ"
+                  >
+                    ${safeText(previewText)}
                   </div>
-                `).join('')}
-              </div>
+                  <div
+                    class="search-text-snippet search-text-snippet-full is-clickable"
+                    onclick="window.searchModule.toggleResultTextByIndex(${index})"
+                    title="クリックで全文表示 / 折りたたみ"
+                  >
+                    ${safeText(fullText)}
+                  </div>
+                </div>
+              ` : `
+                <div class="search-text-snippet">${safeText(fullText)}</div>
+              `}
+              ${hasMoreText ? `
+                <button
+                  type="button"
+                  id="searchTextToggle-${index}"
+                  class="search-text-toggle-btn"
+                  onclick="window.searchModule.toggleResultTextByIndex(${index})"
+                  aria-expanded="false"
+                >
+                  全文表示
+                </button>
+              ` : ''}
             </div>
-          ` : ''}
+
+            <div class="search-text-side">
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 6px;"><i class="far fa-image"></i> ページ画像</div>
+              ${primaryRelatedImageUrl ? `
+                <div class="image-card search-related-page-thumb" onclick="window.searchModule.openTextRelatedImageByIndex(${index}, 0)">
+                  <div class="search-related-page-thumb-aspect">
+                    <img
+                      src="${safeText(primaryRelatedImageUrl)}"
+                      alt="page-preview"
+                      onerror="this.closest('.search-related-page-thumb')?.remove();"
+                    />
+                  </div>
+                  <div class="search-related-page-thumb-title">${safeText(primaryRelatedImageTitle)}</div>
+                </div>
+              ` : `<div class="search-related-page-empty">該当ページ画像なし</div>`}
+            </div>
+          </div>
         ` : ''}
       </div>
     </div>
   `;
+}
+
+export function toggleResultTextByIndex(resultIndex) {
+  const excerptEl = document.getElementById(`searchTextExcerpt-${resultIndex}`);
+  const textContainer = document.getElementById(`searchTextContainer-${resultIndex}`);
+  const toggleBtn = document.getElementById(`searchTextToggle-${resultIndex}`);
+  if (!excerptEl || !textContainer || !toggleBtn) return;
+
+  const isCollapsed = textContainer.classList.contains('is-collapsed');
+  textContainer.classList.toggle('is-collapsed', !isCollapsed);
+  textContainer.classList.toggle('is-expanded', isCollapsed);
+  toggleBtn.textContent = isCollapsed ? '折りたたむ' : '全文表示';
+  toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
 }
 
 function updateResultsSummary(data, normalizedResults, mode) {
@@ -620,16 +687,32 @@ export function openResultFileByIndex(resultIndex) {
 /**
  * テキスト検索結果に紐づくページ画像を開く
  */
-export function openTextRelatedImageByIndex(resultIndex, imageIndex = 0) {
+export async function openTextRelatedImageByIndex(resultIndex, imageIndex = 0) {
   const resultData = window._searchResultsData;
   const item = resultData?.results?.[resultIndex];
   const urls = item?.text_related_image_urls || [];
   const titles = item?.text_related_image_titles || [];
-  if (!urls.length || !urls[imageIndex]) {
+  if (!urls.length) {
     utilsShowToast('関連画像が見つかりません', 'warning');
     return;
   }
-  utilsShowImageModal(urls[imageIndex], titles[imageIndex] || '関連ページ画像', urls, imageIndex, titles);
+
+  const { validUrls, validTitles } = await resolveValidImageCandidates(urls, titles);
+  if (!validUrls.length) {
+    utilsShowToast('関連画像が見つかりません（未生成または取得不可）', 'warning');
+    return;
+  }
+
+  const safeIndex = Math.min(Math.max(imageIndex, 0), validUrls.length - 1);
+  const selectedUrl = validUrls[safeIndex];
+  const selectedTitle = validTitles[safeIndex] || 'ページ画像';
+  utilsShowImageModal(
+    selectedUrl,
+    selectedTitle,
+    [selectedUrl],
+    0,
+    [selectedTitle]
+  );
 }
 
 /**
@@ -721,7 +804,8 @@ window.searchModule = {
   setRetrievalMode,
   openResultImageByIndex,
   openResultFileByIndex,
-  openTextRelatedImageByIndex
+  openTextRelatedImageByIndex,
+  toggleResultTextByIndex
 };
 
 // デフォルトエクスポート
@@ -739,6 +823,7 @@ export default {
   openResultImageByIndex,
   openResultFileByIndex,
   openTextRelatedImageByIndex,
+  toggleResultTextByIndex,
   displaySearchResultsWithMode
 }
 
