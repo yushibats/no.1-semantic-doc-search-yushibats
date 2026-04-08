@@ -654,7 +654,11 @@ function getAuthenticatedImageUrl(urlOrBucket, objectName) {
   
   // 旧形式互換: bucket + objectName が渡された場合
   if (urlOrBucket && objectName) {
-    const baseUrl = `/ai/api/object/${urlOrBucket}/${encodeURIComponent(objectName)}`;
+    const normalizedObjectName = String(objectName)
+      .split('/')
+      .map(segment => encodeURIComponent(segment))
+      .join('/');
+    const baseUrl = `/ai/api/object/${urlOrBucket}/${normalizedObjectName}`;
     if (token) {
       return `${baseUrl}?token=${encodeURIComponent(token)}`;
     }
