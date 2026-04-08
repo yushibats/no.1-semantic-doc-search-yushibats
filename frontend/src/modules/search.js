@@ -637,6 +637,24 @@ export async function performImageSearch() {
 function getAuthenticatedImageUrl(urlOrBucket, objectName) {
   const token = localStorage.getItem('loginToken');
   const apiBase = appState.get('apiBase') || '';
+  const rewriteLocalhostUrl = (rawUrl) => {
+    if (!rawUrl) return rawUrl;
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      if (parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+        return rawUrl;
+      }
+
+      if (apiBase) {
+        const apiUrl = new URL(apiBase, window.location.origin);
+        return `${apiUrl.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+
+      return `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    } catch (_) {
+      return rawUrl;
+    }
+  };
 
   const hasAuthLikeQuery = (url) => {
     if (!url || !url.includes('?')) return false;
@@ -655,18 +673,7 @@ function getAuthenticatedImageUrl(urlOrBucket, objectName) {
   
   // 既に完全なURLが渡された場合(検索APIのurlフィールド)
   if (urlOrBucket && (urlOrBucket.startsWith('http://') || urlOrBucket.startsWith('https://') || urlOrBucket.startsWith('/'))) {
-    let url = urlOrBucket;
-    if (apiBase) {
-      try {
-        const parsed = new URL(urlOrBucket, window.location.origin);
-        const apiOrigin = new URL(apiBase, window.location.origin).origin;
-        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-          url = `${apiOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
-        }
-      } catch (_) {
-        // noop
-      }
-    }
+    let url = rewriteLocalhostUrl(urlOrBucket);
     // 検索APIが返す一時トークン(t)付きURL等はそのまま利用
     if (hasAuthLikeQuery(url)) {
       return url;
@@ -691,7 +698,7 @@ function getAuthenticatedImageUrl(urlOrBucket, objectName) {
     return baseUrl;
   }
   
-  return urlOrBucket || '';
+  return rewriteLocalhostUrl(urlOrBucket || '');
 }
 
 /**
