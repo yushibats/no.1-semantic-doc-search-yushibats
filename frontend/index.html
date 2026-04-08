@@ -154,6 +154,20 @@
             </div>
           </div>
 
+          <div style="display: flex; align-items: center; gap: 12px; margin: -8px 0 20px 0;">
+            <label class="form-label" for="retrievalMode" style="margin: 0; min-width: 120px;">Retrieval Mode</label>
+            <select
+              id="retrievalMode"
+              class="form-input"
+              style="max-width: 220px;"
+              onchange="window.searchModule.setRetrievalMode(this.value)"
+            >
+              <option value="image" selected>image</option>
+              <option value="text">text</option>
+              <option value="hybrid">hybrid</option>
+            </select>
+          </div>
+
           <!-- 検索タイプタブ -->
           <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0;">
             <button 

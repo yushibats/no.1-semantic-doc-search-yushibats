@@ -22,6 +22,186 @@ import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showT
 // 検索画像の状態管理
 let selectedSearchImage = null;
 let currentSearchType = 'text'; // 'text' or 'image'
+let currentRetrievalMode = 'image'; // 'image' | 'text' | 'hybrid'
+
+function formatScore(score) {
+  if (typeof score !== 'number' || Number.isNaN(score)) return '-';
+  return score.toFixed(4);
+}
+
+function safeText(text = '') {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function inferSourceType(result) {
+  if (result?.source_type) return result.source_type;
+  if (result?.matched_images) return 'image';
+  if (result?.chunk_text || result?.content_excerpt || result?.chunk_id) return 'text';
+  if (result?.page_number || result?.page_no || result?.embed_id) return 'image';
+  return 'text';
+}
+
+function normalizeImageFileResultsToItems(fileResults = []) {
+  const items = [];
+  fileResults.forEach((fileResult, fileIndex) => {
+    const originalFilename = fileResult.original_filename || (fileResult.object_name || '').split('/').pop() || '-';
+    const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
+
+    const previewUrls = matchedImages.map(img => (
+      img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)
+    ));
+    const previewTitles = matchedImages.map(img => {
+      const score = typeof img.vector_distance === 'number' ? (1 - img.vector_distance) * 100 : null;
+      return `ページ ${img.page_number ?? '-'}${score !== null ? ` - マッチ度: ${score.toFixed(1)}%` : ''}${typeof img.vector_distance === 'number' ? ` | 距離: ${img.vector_distance.toFixed(4)}` : ''}`;
+    });
+
+    matchedImages.forEach((img, imgIndex) => {
+      const vectorDistance = typeof img.vector_distance === 'number' ? img.vector_distance : null;
+      items.push({
+        source_type: 'image',
+        score: vectorDistance !== null ? (1 - vectorDistance) : null,
+        vector_distance: vectorDistance,
+        file_name: originalFilename,
+        object_name: fileResult.object_name || img.object_name || '-',
+        page_no: img.page_number ?? null,
+        content_excerpt: '',
+        thumbnail_url: img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name),
+        download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
+        preview_urls: previewUrls,
+        preview_titles: previewTitles,
+        preview_index: imgIndex,
+        _raw_ref: { fileIndex, imgIndex }
+      });
+    });
+  });
+
+  return items;
+}
+
+function normalizeSearchResults(data, mode) {
+  const rawResults = Array.isArray(data?.results) ? data.results : [];
+
+  // 既存の image 検索レスポンス（ファイル単位）
+  if (mode === 'image' && rawResults.length > 0 && rawResults[0]?.matched_images) {
+    return normalizeImageFileResultsToItems(rawResults);
+  }
+
+  const normalized = [];
+  rawResults.forEach((result) => {
+    // hybrid で image ファイル単位が混在するケースも許容
+    if (result?.matched_images) {
+      normalized.push(...normalizeImageFileResultsToItems([result]));
+      return;
+    }
+
+    const sourceType = inferSourceType(result);
+    const score =
+      (typeof result.score === 'number' && result.score) ||
+      (typeof result.hybrid_score === 'number' && result.hybrid_score) ||
+      (typeof result.vector_score === 'number' && result.vector_score) ||
+      (typeof result.vector_distance === 'number' ? (1 - result.vector_distance) : null);
+
+    const fileName = result.file_name || result.original_filename || (result.object_name || '').split('/').pop() || '-';
+    const pageNo = result.page_no ?? result.page_number ?? null;
+    const contentExcerpt = result.content_excerpt || result.chunk_text || '';
+    const imageUrl = result.url
+      ? getAuthenticatedImageUrl(result.url)
+      : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : '');
+
+    normalized.push({
+      source_type: sourceType,
+      score,
+      vector_distance: typeof result.vector_distance === 'number' ? result.vector_distance : null,
+      file_name: fileName,
+      object_name: result.object_name || '-',
+      page_no: pageNo,
+      content_excerpt: contentExcerpt,
+      thumbnail_url: sourceType === 'image' ? imageUrl : '',
+      download_url: (result.file_url || result.url)
+        ? getAuthenticatedImageUrl(result.file_url || result.url)
+        : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : ''),
+      preview_urls: sourceType === 'image' && imageUrl ? [imageUrl] : [],
+      preview_titles: sourceType === 'image' ? [`${fileName}${pageNo ? ` - ページ ${pageNo}` : ''}`] : [],
+      preview_index: 0,
+      _raw: result
+    });
+  });
+
+  return normalized;
+}
+
+function renderResultCard(item, index) {
+  const isImage = item.source_type === 'image';
+  const badgeClass = isImage
+    ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
+    : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
+
+  return `
+    <div class="card search-result-card" style="margin-bottom: 12px;">
+      <div class="card-body" style="padding: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(item.source_type || '-')}</span>
+            <span class="badge search-result-stat-badge">score: ${formatScore(item.score)}</span>
+            ${item.vector_distance !== null ? `<span class="badge search-result-stat-badge">distance: ${item.vector_distance.toFixed(4)}</span>` : ''}
+          </div>
+          ${item.download_url ? `
+            <button
+              onclick="window.searchModule.openResultFileByIndex(${index})"
+              class="search-result-download-btn"
+              title="ファイルを開く"
+            >
+              <i class="fas fa-download"></i> 開く
+            </button>
+          ` : ''}
+        </div>
+
+        <div style="font-size: 14px; color: #1f2937; margin-bottom: 6px;"><i class="fas fa-file"></i> ${safeText(item.file_name || '-')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all;">${safeText(item.object_name || '-')}</div>
+        ${item.page_no ? `<div style="font-size: 12px; color: #334155; margin-bottom: 10px;"><i class="far fa-file-alt"></i> page: ${safeText(item.page_no)}</div>` : ''}
+
+        ${isImage && item.thumbnail_url ? `
+          <div
+            class="image-card"
+            onclick="window.searchModule.openResultImageByIndex(${index})"
+            style="max-width: 320px; border: 2px solid #e2e8f0; border-radius: 8px; overflow: hidden; cursor: pointer;"
+          >
+            <div class="search-result-image-aspect">
+              <img
+                src="${safeText(item.thumbnail_url)}"
+                alt="preview"
+                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;"
+              />
+            </div>
+          </div>
+        ` : ''}
+
+        ${!isImage ? `
+          <div style="margin-top: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">
+            ${safeText(item.content_excerpt || '（抜粋なし）')}
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function updateResultsSummary(data, normalizedResults, mode) {
+  const summarySpan = document.getElementById('searchResultsSummary');
+  if (!summarySpan) return;
+
+  const imageCount = normalizedResults.filter(r => r.source_type === 'image').length;
+  const textCount = normalizedResults.filter(r => r.source_type === 'text').length;
+  const processingTime = typeof data?.processing_time === 'number' ? data.processing_time.toFixed(2) : '-';
+  const modeLabel = mode || currentRetrievalMode;
+
+  summarySpan.textContent = `mode: ${modeLabel} / total: ${normalizedResults.length}件 (image: ${imageCount}, text: ${textCount}, ${processingTime}秒)`;
+}
 
 /**
  * 検索タイプを切り替え
@@ -60,6 +240,18 @@ export function switchSearchType(type) {
     
     imagePanel.style.display = 'block';
     textPanel.style.display = 'none';
+  }
+}
+
+/**
+ * Retrieval mode を設定
+ * @param {string} mode - 'image' | 'text' | 'hybrid'
+ */
+export function setRetrievalMode(mode) {
+  currentRetrievalMode = mode || 'image';
+  const selector = document.getElementById('retrievalMode');
+  if (selector && selector.value !== currentRetrievalMode) {
+    selector.value = currentRetrievalMode;
   }
 }
 
@@ -134,6 +326,7 @@ export async function performImageSearch() {
   const minScore = parseFloat(document.getElementById('minScore').value) || 0.7;
   
   try {
+    setRetrievalMode('image');
     utilsShowLoading('画像検索中...');
     
     // FormDataを作成
@@ -151,7 +344,7 @@ export async function performImageSearch() {
     });
     
     utilsHideLoading();
-    displaySearchResults(data);
+    displaySearchResultsWithMode(data, { mode: 'image' });
     
     // 検索完了メッセージを表示
     utilsShowToast('画像検索が完了しました', 'success');
@@ -208,22 +401,31 @@ export async function performSearch() {
     return;
   }
   
+  const retrievalModeElement = document.getElementById('retrievalMode');
+  const retrievalMode = retrievalModeElement?.value || currentRetrievalMode || 'image';
+  setRetrievalMode(retrievalMode);
+
   try {
-    utilsShowLoading('検索中...');
+    const loadingLabel = retrievalMode === 'hybrid' ? 'ハイブリッド検索中...' : (retrievalMode === 'text' ? 'テキスト検索中...' : '画像検索中...');
+    utilsShowLoading(loadingLabel);
     
-    const requestBody = { query, top_k: topK, min_score: minScore };
+    const requestBody = { query, top_k: topK, min_score: minScore, search_mode: retrievalMode };
     if (filenameFilter) {
       requestBody.filename_filter = filenameFilter;
     }
     
-    const data = await authApiCall('/ai/api/search', {
+    const endpoint = retrievalMode === 'text'
+      ? '/ai/api/search/text'
+      : (retrievalMode === 'hybrid' ? '/ai/api/search/hybrid' : '/ai/api/search');
+
+    const data = await authApiCall(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
     });
     
     utilsHideLoading();
-    displaySearchResults(data);
+    displaySearchResults(data, { mode: retrievalMode });
     
     // 検索完了メッセージを表示
     utilsShowToast('検索が完了しました', 'success');
@@ -238,144 +440,78 @@ export async function performSearch() {
  * 検索結果を表示
  * @param {Object} data - 検索結果データ
  */
-export function displaySearchResults(data) {
+export function displaySearchResults(data, options = {}) {
+  return displaySearchResultsWithMode(data, { mode: options.mode || currentRetrievalMode });
+}
+
+/**
+ * 検索結果を表示（mode対応）
+ * @param {Object} data
+ * @param {{mode?: string}} options
+ */
+export function displaySearchResultsWithMode(data, options = {}) {
   const resultsDiv = document.getElementById('searchResults');
-  const summarySpan = document.getElementById('searchResultsSummary');
   const listDiv = document.getElementById('searchResultsList');
-  
-  if (!data.results || data.results.length === 0) {
+
+  const mode = options.mode || currentRetrievalMode || 'image';
+  const normalizedResults = normalizeSearchResults(data, mode);
+
+  if (!normalizedResults.length) {
     resultsDiv.style.display = 'block';
-    summarySpan.textContent = '検索結果なし';
+    updateResultsSummary(data, [], mode);
     listDiv.innerHTML = `
       <div class="empty-state">
         <div class="empty-state-icon"><i class="fas fa-search" style="color: #94a3b8;"></i></div>
         <div class="empty-state-title">検索結果が見つかりませんでした</div>
-        <div class="empty-state-subtitle">別のキーワードで検索してみてください</div>
+        <div class="empty-state-subtitle">mode: ${safeText(mode)} / 別のキーワードで検索してみてください</div>
       </div>
     `;
     return;
   }
   
   resultsDiv.style.display = 'block';
-  summarySpan.textContent = `${data.total_files}ファイル (${data.total_images}画像, ${data.processing_time.toFixed(2)}秒)`;
-  
-  // ファイル単位で表示
-  listDiv.innerHTML = data.results.map((fileResult, fileIndex) => {
-    const distancePercent = (1 - fileResult.min_distance) * 100;
-    const originalFilename = fileResult.original_filename || fileResult.object_name.split('/').pop();
-    
-    // ファイル情報カード
-    const fileCardHtml = `
-      <div class="card search-result-card">
-        <!-- ファイルヘッダー -->
-        <div class="card-header search-result-header">
-          <div class="search-result-header-row">
-            <div class="search-result-header-left">
-              <span class="badge search-result-badge-white">#${fileIndex + 1}</span>
-              <div>
-                <div class="search-result-filename"><i class="fas fa-file"></i> ${originalFilename}</div>
-                <div class="search-result-path">${fileResult.object_name}</div>
-              </div>
-            </div>
-            <div class="search-result-stats">
-              <span class="badge search-result-stat-badge">
-                マッチ度: ${distancePercent.toFixed(1)}%
-              </span>
-              <span class="badge search-result-stat-badge">
-                ${fileResult.matched_images.length}ページ
-              </span>
-              <button 
-                onclick="window.searchModule.downloadFile('${fileResult.bucket}', '${encodeURIComponent(fileResult.object_name)}')"
-                class="search-result-download-btn"
-                title="ファイルをダウンロード"
-              >
-                <i class="fas fa-download"></i> ダウンロード
-              </button>
-            </div>
-          </div>
-        </div>
-        
-        <!-- ページ画像グリッド -->
-        <div class="card-body">
-          <div class="search-result-body-title">
-            <i class="fas fa-images"></i> マッチしたページ画像（距離が小さい順）
-          </div>
-          <div class="search-result-images-grid">
-            ${fileResult.matched_images.map((img, imgIndex) => {
-              const imgDistancePercent = (1 - img.vector_distance) * 100;
-              // img.url(APIから返却された絶対URL)を優先、なければbucket+object_nameから生成
-              const imageUrl = img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name);
-              
-              return `
-                <div 
-                  class="image-card"
-                  style="
-                    border: 2px solid #e2e8f0; 
-                    border-radius: 8px; 
-                    overflow: hidden; 
-                    cursor: pointer; 
-                    transition: all 0.3s ease;
-                    background: white;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                  "
-                  onclick="window.searchModule.showSearchImageModal(${fileIndex}, ${imgIndex})"
-                  onmouseover="this.style.transform='translateY(-4px)'; this.style.boxShadow='0 8px 16px rgba(15, 40, 71, 0.3)'; this.style.borderColor='#1a365d';"
-                  onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)'; this.style.borderColor='#e2e8f0';"
-                >
-                  <!-- サムネイル画像 -->
-                  <div class="search-result-image-aspect">
-                    <img 
-                      src="${imageUrl}" 
-                      alt="ページ ${img.page_number}"
-                      style="
-                        position: absolute;
-                        top: 0;
-                        left: 0;
-                        width: 100%;
-                        height: 100%;
-                        object-fit: contain;
-                      "
-                      onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27200%27 height=%27200%27%3E%3Crect fill=%27%23f1f5f9%27 width=%27200%27 height=%27200%27/%3E%3Ctext x=%2750%25%27 y=%2750%25%27 text-anchor=%27middle%27 dy=%27.3em%27 fill=%27%2394a3b8%27 font-size=%2724%27%3E画像エラー%3C/text%3E%3C/svg%3E'"
-                    />
-                    <!-- マッチ度バッジ -->
-                    <div style="
-                      position: absolute;
-                      top: 8px;
-                      right: 8px;
-                      background: rgba(26, 54, 93, 0.95);
-                      color: white;
-                      padding: 4px 8px;
-                      border-radius: 4px;
-                      font-size: 11px;
-                      font-weight: 600;
-                      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                    ">
-                      ${imgDistancePercent.toFixed(1)}%
-                    </div>
-                  </div>
-                  
-                  <!-- 画像情報 -->
-                  <div class="search-result-image-info">
-                    <div class="search-result-image-title">
-                      <i class="fas fa-file"></i> ページ ${img.page_number}
-                    </div>
-                    <div class="search-result-image-similarity">
-                      距離: ${img.vector_distance.toFixed(4)}
-                    </div>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-      </div>
-    `;
-    
-    return fileCardHtml;
-  }).join('');
+  updateResultsSummary(data, normalizedResults, mode);
+
+  listDiv.innerHTML = normalizedResults.map((item, index) => renderResultCard(item, index)).join('');
   
   // 検索結果データをグローバルに保存（画像モーダル用）
-  window._searchResultsData = data;
+  window._searchResultsData = {
+    raw: data,
+    mode,
+    results: normalizedResults
+  };
+}
+
+/**
+ * 結果一覧のindexから画像モーダルを表示
+ */
+export function openResultImageByIndex(resultIndex) {
+  const resultData = window._searchResultsData;
+  const item = resultData?.results?.[resultIndex];
+  if (!item || item.source_type !== 'image') {
+    utilsShowToast('画像データが見つかりません', 'warning');
+    return;
+  }
+
+  const urls = item.preview_urls?.length ? item.preview_urls : [item.thumbnail_url];
+  const titles = item.preview_titles?.length
+    ? item.preview_titles
+    : [`${item.file_name || '画像'}${item.page_no ? ` - ページ ${item.page_no}` : ''}`];
+  const selectedIndex = typeof item.preview_index === 'number' ? item.preview_index : 0;
+  utilsShowImageModal(urls[selectedIndex], titles[selectedIndex], urls, selectedIndex, titles);
+}
+
+/**
+ * 結果一覧のindexからファイルを開く
+ */
+export function openResultFileByIndex(resultIndex) {
+  const resultData = window._searchResultsData;
+  const item = resultData?.results?.[resultIndex];
+  if (!item?.download_url) {
+    utilsShowToast('ファイルURLが見つかりません', 'warning');
+    return;
+  }
+  return downloadFile(item.download_url, '');
 }
 
 /**
@@ -384,14 +520,14 @@ export function displaySearchResults(data) {
  * @param {number} imageIndex - 画像のインデックス
  */
 export function showSearchImageModal(fileIndex, imageIndex) {
-  // グローバルに保存された検索結果データを取得
-  const data = window._searchResultsData;
-  if (!data || !data.results || !data.results[fileIndex]) {
+  // 旧呼び出し互換: rawレスポンス構造から表示
+  const rawData = window._searchResultsData?.raw;
+  if (!rawData || !rawData.results || !rawData.results[fileIndex]) {
     utilsShowToast('画像データが見つかりません', 'error');
     return;
   }
   
-  const fileResult = data.results[fileIndex];
+  const fileResult = rawData.results[fileIndex];
   const matchedImages = fileResult.matched_images;
   
   if (!matchedImages || imageIndex >= matchedImages.length) {
@@ -449,6 +585,8 @@ export function clearSearchResults() {
   
   // 検索結果を非表示
   document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchResultsList').innerHTML = '';
+  document.getElementById('searchResultsSummary').textContent = '';
 }
 
 // windowオブジェクトに登録（HTMLから呼び出せるように）
@@ -461,7 +599,10 @@ window.searchModule = {
   clearSearchResults,
   switchSearchType,
   handleSearchImageSelect,
-  clearSearchImage
+  clearSearchImage,
+  setRetrievalMode,
+  openResultImageByIndex,
+  openResultFileByIndex
 };
 
 // デフォルトエクスポート
@@ -474,7 +615,11 @@ export default {
   clearSearchResults,
   switchSearchType,
   handleSearchImageSelect,
-  clearSearchImage
+  clearSearchImage,
+  setRetrievalMode,
+  openResultImageByIndex,
+  openResultFileByIndex,
+  displaySearchResultsWithMode
 }
 
 /**
