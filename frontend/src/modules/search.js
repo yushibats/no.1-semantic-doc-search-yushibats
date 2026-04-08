@@ -230,12 +230,15 @@ function normalizeImageFileResultsToItems(fileResults = []) {
 
     matchedImages.forEach((img, imgIndex) => {
       const vectorDistance = typeof img.vector_distance === 'number' ? img.vector_distance : null;
+      const imageObjectName = img.object_name || fileResult.object_name || '-';
+      const imageBucket = img.bucket || fileResult.bucket || '';
       items.push({
         source_type: 'image',
         score: vectorDistance !== null ? (1 - vectorDistance) : null,
         vector_distance: vectorDistance,
+        bucket: imageBucket,
         file_name: originalFilename,
-        object_name: fileResult.object_name || img.object_name || '-',
+        object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
         thumbnail_url: img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name),
