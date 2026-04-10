@@ -398,10 +398,27 @@ function renderResultCard(item, index, options = {}) {
   return `<div class="card search-result-card" style="margin-bottom: 12px;">${cardInner}</div>`;
 }
 
+function renderDocumentGroupSection(title, iconClass, entries, renderer) {
+  if (!entries.length) return '';
+
+  return `
+    <div class="search-doc-group-section">
+      <div class="search-doc-group-section-title"><i class="${safeText(iconClass)}"></i> ${safeText(title)} <span class="search-doc-group-section-count">${entries.length}件</span></div>
+      <div class="search-doc-group-entries">
+        ${entries.map(renderer).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderDocumentGroupCard(group, groupIndex) {
-  const sourceTypeLabel = group.source_types.length === 1
-    ? group.source_types[0]
-    : `mixed(${group.source_types.join(', ')})`;
+  const textEntries = group.entries.filter(({ item }) => item.source_type === 'text');
+  const imageEntries = group.entries.filter(({ item }) => item.source_type === 'image');
+  const hasText = textEntries.length > 0;
+  const hasImage = imageEntries.length > 0;
+  const sourceTypeLabel = hasText && hasImage
+    ? 'text + image'
+    : (hasText ? 'text' : 'image');
 
   return `
     <div class="card search-doc-group-card">
@@ -423,10 +440,9 @@ function renderDocumentGroupCard(group, groupIndex) {
       </div>
 
       <div class="search-doc-group-body">
-        <div class="search-doc-group-body-title"><i class="far fa-images"></i> マッチした項目（距離が小さい順）</div>
-        <div class="search-doc-group-entries">
-          ${group.entries.map(({ item, index }) => renderResultCard(item, index, { compact: true })).join('')}
-        </div>
+        <div class="search-doc-group-body-title"><i class="far fa-images"></i> マッチした項目（同一ドキュメント内で集約表示）</div>
+        ${renderDocumentGroupSection('テキスト一致', 'far fa-file-alt', textEntries, ({ item, index }) => renderResultCard(item, index, { compact: true }))}
+        ${renderDocumentGroupSection('画像一致', 'far fa-image', imageEntries, ({ item, index }) => renderResultCard(item, index, { compact: true }))}
       </div>
     </div>
   `;
