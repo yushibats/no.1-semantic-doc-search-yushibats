@@ -83,6 +83,12 @@ class ImageHybridSearchResponse(BaseModel):
     weights: Optional[dict] = None
 
 
+class KeywordImageHybridSearchQuery(TextSearchQuery):
+    """キーワード入力で画像ベクトル + TEXT_CHUNKSキーワード検索を行うクエリ"""
+    image_weight: Optional[float] = 0.7
+    keyword_weight: Optional[float] = 0.3
+
+
 class TextChunkSearchResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

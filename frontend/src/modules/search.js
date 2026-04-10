@@ -23,7 +23,7 @@ import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showT
 // 検索画像の状態管理
 let selectedSearchImage = null;
 let currentSearchType = 'text'; // 'text' or 'image'
-let currentRetrievalMode = 'image'; // 'image' | 'text' | 'hybrid' | 'image-hybrid'
+let currentRetrievalMode = 'image'; // 'image' | 'text' | 'hybrid' | 'image-hybrid(keyword→image+keyword)'
 
 function formatMatchPercent(score) {
   if (typeof score !== 'number' || Number.isNaN(score)) return '-';
@@ -719,35 +719,32 @@ export async function performImageSearch() {
   try {
     const retrievalModeElement = document.getElementById('retrievalMode');
     const retrievalMode = retrievalModeElement?.value || currentRetrievalMode || 'image';
+    if (retrievalMode === 'image-hybrid') {
+      utilsShowToast('image-hybrid はキーワード入力から実行してください', 'warning');
+      return;
+    }
     setRetrievalMode(retrievalMode);
-    utilsShowLoading(retrievalMode === 'image-hybrid' ? '画像ハイブリッド検索中...' : '画像検索中...');
+    utilsShowLoading('画像検索中...');
     
     // FormDataを作成
     const formData = new FormData();
     formData.append('image', selectedSearchImage);
     formData.append('top_k', topK.toString());
     formData.append('min_score', minScore.toString());
-    if (retrievalMode === 'image-hybrid') {
-      const query = document.getElementById('searchQuery')?.value?.trim() || '';
-      if (query) {
-        formData.append('query', query);
-      }
-    }
     if (filenameFilter) {
       formData.append('filename_filter', filenameFilter);
     }
     
-    const endpoint = retrievalMode === 'image-hybrid' ? '/ai/api/search/image-hybrid' : '/ai/api/search/image';
-    const data = await authApiCall(endpoint, {
+    const data = await authApiCall('/ai/api/search/image', {
       method: 'POST',
       body: formData
     });
     
     utilsHideLoading();
-    displaySearchResultsWithMode(data, { mode: retrievalMode === 'image-hybrid' ? 'hybrid' : 'image' });
+    displaySearchResultsWithMode(data, { mode: 'image' });
     
     // 検索完了メッセージを表示
-    utilsShowToast(retrievalMode === 'image-hybrid' ? '画像ハイブリッド検索が完了しました' : '画像検索が完了しました', 'success');
+    utilsShowToast('画像検索が完了しました', 'success');
     
   } catch (error) {
     utilsHideLoading();
@@ -870,9 +867,14 @@ export async function performSearch() {
       requestBody.filename_filter = filenameFilter;
     }
     
-    const endpoint = retrievalMode === 'text'
-      ? '/ai/api/search/text'
-      : (retrievalMode === 'hybrid' ? '/ai/api/search/hybrid' : '/ai/api/search');
+    let endpoint = '/ai/api/search';
+    if (retrievalMode === 'text') {
+      endpoint = '/ai/api/search/text';
+    } else if (retrievalMode === 'hybrid') {
+      endpoint = '/ai/api/search/hybrid';
+    } else if (retrievalMode === 'image-hybrid') {
+      endpoint = '/ai/api/search/image-hybrid';
+    }
 
     const data = await authApiCall(endpoint, {
       method: 'POST',
@@ -881,7 +883,7 @@ export async function performSearch() {
     });
     
     utilsHideLoading();
-    displaySearchResults(data, { mode: retrievalMode });
+    displaySearchResults(data, { mode: retrievalMode === 'image-hybrid' ? 'hybrid' : retrievalMode });
     
     // 検索完了メッセージを表示
     utilsShowToast('検索が完了しました', 'success');

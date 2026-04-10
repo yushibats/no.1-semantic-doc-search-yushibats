@@ -63,6 +63,7 @@ from app.models.search import (
     HybridImageSearchResult,
     ImageSearchResult,
     ImageHybridSearchResponse,
+    KeywordImageHybridSearchQuery,
 )
 from app.models.database import (
     DatabaseSettings,
@@ -2104,76 +2105,59 @@ async def search_documents_by_image(
 
 @app.post("/search/image-hybrid", response_model=ImageHybridSearchResponse)
 async def search_documents_by_image_hybrid(
-    image: UploadFile = File(...),
-    query: Optional[str] = Form(None),
-    top_k: int = Form(10),
-    min_score: float = Form(0.7),
-    filename_filter: Optional[str] = Form(None),
-    vector_weight: float = Form(0.7),
-    keyword_weight: float = Form(0.3),
-    request: Request = None,
+    query: KeywordImageHybridSearchQuery,
+    request: Request,
 ):
-    """画像ベクトル + キーワードによるファイル単位ハイブリッド検索"""
+    """キーワード入力に対して、画像ベクトル + TEXT_CHUNKSキーワードでハイブリッド検索"""
     try:
         start_time = time.time()
 
-        if not image.content_type or not image.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="画像ファイルを指定してください")
-
-        image_content = await image.read()
-        if not image_content:
-            raise HTTPException(status_code=400, detail="画像データが空です")
-
-        vector_weight = max(0.0, min(1.0, float(vector_weight)))
-        keyword_weight = max(0.0, min(1.0, float(keyword_weight)))
-        weight_sum = vector_weight + keyword_weight
+        image_weight = max(0.0, min(1.0, float(query.image_weight if query.image_weight is not None else 0.7)))
+        keyword_weight = max(0.0, min(1.0, float(query.keyword_weight if query.keyword_weight is not None else 0.3)))
+        weight_sum = image_weight + keyword_weight
         if weight_sum <= 0:
-            vector_weight = 0.7
+            image_weight = 0.7
             keyword_weight = 0.3
             weight_sum = 1.0
 
-        normalized_vector_weight = vector_weight / weight_sum
+        normalized_vector_weight = image_weight / weight_sum
         normalized_keyword_weight = keyword_weight / weight_sum
 
-        image_stream = io.BytesIO(image_content)
         query_embedding = await asyncio.to_thread(
-            image_vectorizer.generate_embedding,
-            image_stream,
-            image.content_type,
+            image_vectorizer.generate_text_embedding,
+            query.query,
         )
         if query_embedding is None:
             return ImageHybridSearchResponse(
                 success=False,
-                query=query,
+                query=query.query,
                 results=[],
                 total=0,
                 total_files=0,
                 total_images=0,
-                message="画像embedding生成に失敗しました",
+                message="クエリembedding生成に失敗しました",
                 processing_time=time.time() - start_time,
                 weights={
-                    "vector_weight": normalized_vector_weight,
+                    "image_weight": normalized_vector_weight,
                     "keyword_weight": normalized_keyword_weight,
                 },
             )
 
         image_rows = await image_vectorizer.search_similar_images_async(
             query_embedding=query_embedding,
-            limit=max(top_k * 5, top_k),
-            threshold=min_score,
-            filename_filter=filename_filter,
+            limit=max((query.top_k or 10) * 5, query.top_k or 10),
+            threshold=query.min_score if query.min_score is not None else 0.7,
+            filename_filter=query.filename_filter,
         ) or []
 
-        keyword_terms = [t for t in re.split(r"\s+", (query or "").strip()) if t]
+        keyword_terms = [t for t in re.split(r"\s+", (query.query or "").strip()) if t]
         text_rows = []
         if keyword_terms:
-            if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
-                logger.info("Text RAG is disabled. 画像ハイブリッド検索ではキーワードスコアのみローカル評価を継続")
             text_rows = await asyncio.to_thread(
                 database_service.search_text_chunks_by_keyword,
-                query,
-                max(top_k * 5, top_k),
-                filename_filter,
+                query.query,
+                max((query.top_k or 10) * 5, query.top_k or 10),
+                query.filename_filter,
             ) or []
 
         from collections import defaultdict
@@ -2240,7 +2224,7 @@ async def search_documents_by_image_hybrid(
             object_name = row.get("object_name")
             if not object_name:
                 continue
-            score = text_rag_processor._keyword_score(query or "", row.get("chunk_text", ""))
+            score = text_rag_processor._keyword_score(query.query or "", row.get("chunk_text", ""))
             if score <= 0:
                 continue
             keyword_scores_by_object[object_name] = max(keyword_scores_by_object[object_name], score)
@@ -2326,19 +2310,19 @@ async def search_documents_by_image_hybrid(
             )
 
         typed_results.sort(key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0, reverse=True)
-        typed_results = typed_results[:top_k]
+        typed_results = typed_results[: query.top_k or 10]
 
         processing_time = time.time() - start_time
         return ImageHybridSearchResponse(
             success=True,
-            query=query,
+            query=query.query,
             results=typed_results,
             total=len(typed_results),
             total_files=len(typed_results),
             total_images=sum(len(r.matched_images) for r in typed_results),
             processing_time=processing_time,
             weights={
-                "vector_weight": normalized_vector_weight,
+                "image_weight": normalized_vector_weight,
                 "keyword_weight": normalized_keyword_weight,
             },
         )
