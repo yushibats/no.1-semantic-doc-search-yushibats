@@ -494,6 +494,9 @@ function renderResultCard(item, index, options = {}) {
         <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
         ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
       `;
+  const keywordHitBadge = keywordMatches.length > 0
+    ? `<span class="badge search-result-inline-stat-badge" title="キーワード一致あり"><i class="fas fa-key" style="margin-right: 4px;"></i></span>`
+    : '';
 
   const cardInner = `
       <div class="card-body search-result-card-body">
@@ -524,6 +527,7 @@ function renderResultCard(item, index, options = {}) {
           <div class="search-result-entry-header">
             <div class="search-result-entry-badges">
             <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(isMixed ? 'text + image' : (item.source_type || '-'))}</span>
+            ${keywordHitBadge}
             ${metricBadges}
             ${pageLabel ? `<span class="badge search-result-inline-stat-badge">${pageLabel}</span>` : ''}
             </div>
