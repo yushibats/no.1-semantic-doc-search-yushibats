@@ -2306,6 +2306,7 @@ async def search_documents_by_image_hybrid(
                         "image": file_data["scores"].get("image", 0.0),
                         "keyword": file_data["scores"].get("keyword", 0.0),
                     },
+                    keyword_matches=file_data.get("keyword_matches", []),
                 )
             )
 

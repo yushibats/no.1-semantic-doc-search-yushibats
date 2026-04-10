@@ -30,6 +30,30 @@ function formatMatchPercent(score) {
   return `${(score * 100).toFixed(1)}%`;
 }
 
+function getRetrievalModeLabel(mode) {
+  switch (mode) {
+    case 'hybrid':
+      return 'image×text';
+    case 'image-hybrid':
+      return 'image×keyword';
+    default:
+      return mode || 'image';
+  }
+}
+
+function buildKeywordMatchExcerpt(result) {
+  const matches = Array.isArray(result?.keyword_matches) ? result.keyword_matches : [];
+  if (!matches.length) return '';
+
+  return matches
+    .map((match) => {
+      const pageLabel = match?.page_number ? `page ${match.page_number}: ` : '';
+      return `${pageLabel}${match?.chunk_text || ''}`;
+    })
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+}
+
 function safeText(text = '') {
   return String(text)
     .replace(/&/g, '&amp;')
@@ -396,7 +420,8 @@ function normalizeSearchResults(data, mode) {
     const pageNo = sourceType === 'text'
       ? inferTextRelatedPageNo(result)
       : (result.page_no ?? result.page_number ?? null);
-    const contentExcerpt = result.content_excerpt || result.chunk_text || '';
+    const keywordExcerpt = buildKeywordMatchExcerpt(result);
+    const contentExcerpt = result.content_excerpt || result.chunk_text || keywordExcerpt || '';
     const imageUrl = result.url
       ? getAuthenticatedImageUrl(result.url)
       : (result.bucket && result.object_name ? getAuthenticatedImageUrl(result.bucket, result.object_name) : '');
@@ -427,6 +452,7 @@ function normalizeSearchResults(data, mode) {
       preview_titles: sourceType === 'image' ? [`${fileName}${pageNo ? ` - ページ ${pageNo}` : ''}`] : [],
       text_related_image_urls: textRelatedPreview.urls,
       text_related_image_titles: textRelatedPreview.titles,
+      keyword_matches: Array.isArray(result.keyword_matches) ? result.keyword_matches : [],
       preview_index: 0,
       _raw: result
     });
@@ -441,6 +467,7 @@ function renderResultCard(item, index, options = {}) {
   const isImage = item.source_type === 'image';
   const isMixed = sourceTypes.includes('image') && sourceTypes.includes('text');
   const fullText = item.content_excerpt || '（抜粋なし）';
+  const keywordMatches = Array.isArray(item.keyword_matches) ? item.keyword_matches : [];
   const relatedImageUrls = Array.isArray(item.text_related_image_urls) ? item.text_related_image_urls : [];
   const relatedImageTitles = Array.isArray(item.text_related_image_titles) ? item.text_related_image_titles : [];
   const primaryRelatedImageUrl = relatedImageUrls[0] || '';
@@ -510,12 +537,25 @@ function renderResultCard(item, index, options = {}) {
                   <i class="far fa-file-alt"></i> テキスト表示
                 </button>
               ` : ''}
+              ${keywordMatches.length > 0 ? `
+                <button
+                  type="button"
+                  class="search-text-popup-btn"
+                  onclick="window.searchModule.openResultTextModalByIndex(${index})"
+                >
+                  <i class="fas fa-key"></i> キーワード一致
+                </button>
+              ` : ''}
             </div>
           </div>
 
           ${sourceTypes.includes('text') ? `
             <div class="search-text-thumb-caption">
               <i class="far fa-image"></i> ${safeText(primaryRelatedImageTitle)}
+            </div>
+          ` : keywordMatches.length > 0 ? `
+            <div class="search-text-thumb-caption">
+              <i class="fas fa-key"></i> キーワード一致あり（${safeText(keywordMatches.length)}件）
             </div>
           ` : ''}
         </div>
@@ -572,12 +612,13 @@ export function toggleResultTextByIndex(resultIndex) {
 export function openResultTextModalByIndex(resultIndex) {
   const resultData = window._searchResultsData;
   const item = resultData?.results?.[resultIndex];
-  if (!item || item.source_type !== 'text') {
+  const hasKeywordMatch = Array.isArray(item?.keyword_matches) && item.keyword_matches.length > 0;
+  if (!item || (item.source_type !== 'text' && !hasKeywordMatch)) {
     utilsShowToast('テキストデータが見つかりません', 'warning');
     return;
   }
 
-  const modalTitle = `${item.file_name || 'テキスト結果'}${item.page_no ? ` / page ${item.page_no}` : ''}`;
+  const modalTitle = `${item.file_name || 'テキスト結果'}${item.page_no ? ` / page ${item.page_no}` : ''}${hasKeywordMatch && item.source_type !== 'text' ? ' / キーワード一致' : ''}`;
   showResultTextModal(modalTitle, item.content_excerpt || '（抜粋なし）');
 }
 
@@ -588,7 +629,7 @@ function updateResultsSummary(data, normalizedResults, mode, groupedResults = nu
   const imageCount = normalizedResults.filter(r => r.source_type === 'image').length;
   const textCount = normalizedResults.filter(r => r.source_type === 'text').length;
   const processingTime = typeof data?.processing_time === 'number' ? data.processing_time.toFixed(2) : '-';
-  const modeLabel = mode || currentRetrievalMode;
+  const modeLabel = getRetrievalModeLabel(mode || currentRetrievalMode);
   const docsCount = Array.isArray(groupedResults) ? groupedResults.length : 0;
 
   summarySpan.textContent = `mode: ${modeLabel} / docs: ${docsCount}件 / hits: ${normalizedResults.length}件 (image: ${imageCount}, text: ${textCount}, ${processingTime}秒)`;
@@ -922,7 +963,7 @@ export function displaySearchResultsWithMode(data, options = {}) {
       <div class="empty-state">
         <div class="empty-state-icon"><i class="fas fa-search" style="color: #94a3b8;"></i></div>
         <div class="empty-state-title">検索結果が見つかりませんでした</div>
-        <div class="empty-state-subtitle">mode: ${safeText(mode)} / 別のキーワードで検索してみてください</div>
+        <div class="empty-state-subtitle">mode: ${safeText(getRetrievalModeLabel(mode))} / 別のキーワードで検索してみてください</div>
       </div>
     `;
     return;

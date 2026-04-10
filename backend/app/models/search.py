@@ -124,6 +124,7 @@ class HybridImageSearchResult(BaseModel):
     url: Optional[str] = None
     hybrid_score: Optional[float] = None
     scores: Optional[dict] = None
+    keyword_matches: Optional[List[dict]] = None
 
 
 HybridSearchResult = Union[TextChunkSearchResult, HybridImageSearchResult]
