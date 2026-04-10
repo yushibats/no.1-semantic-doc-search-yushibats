@@ -82,6 +82,10 @@ function inferTextRelatedPageNo(result) {
 
 function getDocumentGroupKey(item) {
   const bucket = item?.bucket || '';
+  const documentObjectName = item?.document_object_name || '';
+  if (documentObjectName) {
+    return `${bucket}::${documentObjectName}`;
+  }
   const objectName = item?.object_name || '';
   const normalizedObjectName = objectName.replace(/\/page_(\d{3}|\d{6})\.png$/i, '');
   const fallbackName = item?.file_name || objectName || '-';
@@ -238,6 +242,7 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         vector_distance: vectorDistance,
         bucket: imageBucket,
         file_name: originalFilename,
+        document_object_name: fileResult.object_name || imageObjectName,
         object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
@@ -302,6 +307,7 @@ function normalizeSearchResults(data, mode) {
       vector_distance: typeof result.vector_distance === 'number' ? result.vector_distance : null,
       bucket: result.bucket || '',
       file_name: fileName,
+      document_object_name: result.file_object_name || result.object_name || '-',
       object_name: result.object_name || '-',
       page_no: pageNo,
       content_excerpt: contentExcerpt,
