@@ -166,6 +166,51 @@ function groupResultsByDocument(normalizedResults = []) {
   return groups;
 }
 
+function mergeTextResultsByPage(normalizedResults = []) {
+  const mergedMap = new Map();
+
+  normalizedResults.forEach((item) => {
+    if (item?.source_type !== 'text') {
+      const key = `raw::${mergedMap.size}`;
+      mergedMap.set(key, item);
+      return;
+    }
+
+    const bucket = item?.bucket || '';
+    const documentObjectName = item?.document_object_name || item?.object_name || item?.file_name || '-';
+    const pageNo = typeof item?.page_no === 'number' && Number.isFinite(item.page_no) ? item.page_no : inferTextRelatedPageNo(item);
+    const key = `text::${bucket}::${documentObjectName}::${pageNo}`;
+
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, {
+        ...item,
+        page_no: pageNo,
+      });
+      return;
+    }
+
+    const existing = mergedMap.get(key);
+    const existingScore = typeof existing?.score === 'number' ? existing.score : Number.NEGATIVE_INFINITY;
+    const nextScore = typeof item?.score === 'number' ? item.score : Number.NEGATIVE_INFINITY;
+    const existingDistance = typeof existing?.vector_distance === 'number' ? existing.vector_distance : Number.POSITIVE_INFINITY;
+    const nextDistance = typeof item?.vector_distance === 'number' ? item.vector_distance : Number.POSITIVE_INFINITY;
+
+    mergedMap.set(key, {
+      ...existing,
+      score: nextScore > existingScore ? item.score : existing.score,
+      vector_distance: nextDistance < existingDistance ? item.vector_distance : existing.vector_distance,
+      content_excerpt: [existing.content_excerpt, item.content_excerpt]
+        .filter(Boolean)
+        .join('\n\n---\n\n'),
+      text_related_image_urls: existing.text_related_image_urls?.length ? existing.text_related_image_urls : item.text_related_image_urls,
+      text_related_image_titles: existing.text_related_image_titles?.length ? existing.text_related_image_titles : item.text_related_image_titles,
+      _merged_chunk_count: (existing._merged_chunk_count || 1) + 1,
+    });
+  });
+
+  return Array.from(mergedMap.values());
+}
+
 function buildRelatedImagePreview(itemLike) {
   const objectName = itemLike?.object_name;
   const bucket = itemLike?.bucket;
@@ -766,7 +811,7 @@ export function displaySearchResultsWithMode(data, options = {}) {
   const listDiv = document.getElementById('searchResultsList');
 
   const mode = options.mode || currentRetrievalMode || 'image';
-  const normalizedResults = normalizeSearchResults(data, mode);
+  const normalizedResults = mergeTextResultsByPage(normalizeSearchResults(data, mode));
   const groupedResults = groupResultsByDocument(normalizedResults);
 
   if (!normalizedResults.length) {
