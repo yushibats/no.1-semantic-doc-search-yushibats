@@ -211,6 +211,69 @@ function mergeTextResultsByPage(normalizedResults = []) {
   return Array.from(mergedMap.values());
 }
 
+function mergeMixedResultsByDocumentPage(normalizedResults = []) {
+  const mergedMap = new Map();
+
+  normalizedResults.forEach((item) => {
+    const bucket = item?.bucket || '';
+    const documentObjectName = item?.document_object_name || item?.object_name || item?.file_name || '-';
+    const pageNo = typeof item?.page_no === 'number' && Number.isFinite(item.page_no)
+      ? item.page_no
+      : inferTextRelatedPageNo(item);
+    const key = `${bucket}::${documentObjectName}::${pageNo}`;
+
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, {
+        ...item,
+        page_no: pageNo,
+        source_types: [item.source_type],
+        metrics: {
+          [item.source_type]: {
+            score: item.score,
+            vector_distance: item.vector_distance,
+          }
+        }
+      });
+      return;
+    }
+
+    const existing = mergedMap.get(key);
+    const existingDistance = typeof existing?.vector_distance === 'number' ? existing.vector_distance : Number.POSITIVE_INFINITY;
+    const nextDistance = typeof item?.vector_distance === 'number' ? item.vector_distance : Number.POSITIVE_INFINITY;
+    const existingScore = typeof existing?.score === 'number' ? existing.score : Number.NEGATIVE_INFINITY;
+    const nextScore = typeof item?.score === 'number' ? item.score : Number.NEGATIVE_INFINITY;
+    const preferredBase = nextDistance < existingDistance || (nextDistance === existingDistance && nextScore > existingScore)
+      ? item
+      : existing;
+
+    mergedMap.set(key, {
+      ...existing,
+      ...preferredBase,
+      page_no: pageNo,
+      source_type: existing.source_type === item.source_type ? existing.source_type : 'mixed',
+      source_types: Array.from(new Set([...(existing.source_types || [existing.source_type]), item.source_type])),
+      metrics: {
+        ...(existing.metrics || {}),
+        [item.source_type]: {
+          score: item.score,
+          vector_distance: item.vector_distance,
+        }
+      },
+      content_excerpt: item.source_type === 'text'
+        ? [existing.content_excerpt, item.content_excerpt].filter(Boolean).join('\n\n---\n\n')
+        : existing.content_excerpt,
+      text_related_image_urls: existing.text_related_image_urls?.length ? existing.text_related_image_urls : item.text_related_image_urls,
+      text_related_image_titles: existing.text_related_image_titles?.length ? existing.text_related_image_titles : item.text_related_image_titles,
+      preview_urls: existing.preview_urls?.length ? existing.preview_urls : item.preview_urls,
+      preview_titles: existing.preview_titles?.length ? existing.preview_titles : item.preview_titles,
+      thumbnail_url: existing.thumbnail_url || item.thumbnail_url,
+      _merged_chunk_count: (existing._merged_chunk_count || 1) + (item.source_type === 'text' ? 1 : 0),
+    });
+  });
+
+  return Array.from(mergedMap.values());
+}
+
 function buildRelatedImagePreview(itemLike) {
   const objectName = itemLike?.object_name;
   const bucket = itemLike?.bucket;
@@ -374,18 +437,36 @@ function normalizeSearchResults(data, mode) {
 
 function renderResultCard(item, index, options = {}) {
   const compact = !!options.compact;
+  const sourceTypes = Array.isArray(item.source_types) ? item.source_types : [item.source_type];
   const isImage = item.source_type === 'image';
+  const isMixed = sourceTypes.includes('image') && sourceTypes.includes('text');
   const fullText = item.content_excerpt || '（抜粋なし）';
   const relatedImageUrls = Array.isArray(item.text_related_image_urls) ? item.text_related_image_urls : [];
   const relatedImageTitles = Array.isArray(item.text_related_image_titles) ? item.text_related_image_titles : [];
   const primaryRelatedImageUrl = relatedImageUrls[0] || '';
   const primaryRelatedImageTitle = relatedImageTitles[0] || `page ${item.page_no || (item._raw?.chunk_index + 1) || 1}`;
-  const badgeClass = isImage
+  const badgeClass = isMixed
+    ? 'background: #ecfeff; color: #0f766e; border: 1px solid #99f6e4;'
+    : isImage
     ? 'background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;'
     : 'background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd;';
 
-  const previewThumbUrl = isImage ? item.thumbnail_url : primaryRelatedImageUrl;
+  const previewThumbUrl = (isImage || isMixed) ? item.thumbnail_url : primaryRelatedImageUrl;
   const pageLabel = item.page_no ? `ページ ${safeText(item.page_no)}` : '';
+  const metrics = item.metrics || {};
+  const metricBadges = isMixed
+    ? ['text', 'image'].filter(type => metrics[type]).map((type) => {
+        const metric = metrics[type] || {};
+        const typeLabel = type === 'text' ? 'text' : 'image';
+        return `
+          <span class="badge search-result-inline-stat-badge">${typeLabel} マッチ度: ${formatMatchPercent(metric.score)}</span>
+          ${metric.vector_distance !== null && metric.vector_distance !== undefined ? `<span class="badge search-result-inline-stat-badge">${typeLabel} 距離: ${Number(metric.vector_distance).toFixed(4)}</span>` : ''}
+        `;
+      }).join('')
+    : `
+        <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
+        ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
+      `;
 
   const cardInner = `
       <div class="card-body search-result-card-body">
@@ -393,14 +474,14 @@ function renderResultCard(item, index, options = {}) {
           ${previewThumbUrl ? `
             <div
               class="image-card search-result-thumb-card"
-              onclick="${isImage ? `window.searchModule.openResultImageByIndex(${index})` : `window.searchModule.openTextRelatedImageByIndex(${index}, 0)`}"
+              onclick="${(isImage || isMixed) ? `window.searchModule.openResultImageByIndex(${index})` : `window.searchModule.openTextRelatedImageByIndex(${index}, 0)`}"
             >
               <div class="search-result-thumb-aspect">
                 <img
                   src="${safeText(previewThumbUrl)}"
                   alt="preview"
                   style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;"
-                  ${!isImage ? 'onerror="this.closest(\'.search-result-thumb-card\')?.classList.add(\'is-hidden\');"' : ''}
+                  ${!(isImage || isMixed) ? 'onerror="this.closest(\'.search-result-thumb-card\')?.classList.add(\'is-hidden\');"' : ''}
                 />
               </div>
             </div>
@@ -415,13 +496,12 @@ function renderResultCard(item, index, options = {}) {
         <div class="search-result-content-column">
           <div class="search-result-entry-header">
             <div class="search-result-entry-badges">
-            <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(item.source_type || '-')}</span>
-            <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
-            ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
+            <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(isMixed ? 'text + image' : (item.source_type || '-'))}</span>
+            ${metricBadges}
             ${pageLabel ? `<span class="badge search-result-inline-stat-badge">${pageLabel}</span>` : ''}
             </div>
             <div class="search-result-card-actions">
-              ${!isImage ? `
+              ${sourceTypes.includes('text') ? `
                 <button
                   type="button"
                   class="search-text-popup-btn"
@@ -433,7 +513,7 @@ function renderResultCard(item, index, options = {}) {
             </div>
           </div>
 
-          ${!isImage ? `
+          ${sourceTypes.includes('text') ? `
             <div class="search-text-thumb-caption">
               <i class="far fa-image"></i> ${safeText(primaryRelatedImageTitle)}
             </div>
@@ -811,7 +891,7 @@ export function displaySearchResultsWithMode(data, options = {}) {
   const listDiv = document.getElementById('searchResultsList');
 
   const mode = options.mode || currentRetrievalMode || 'image';
-  const normalizedResults = mergeTextResultsByPage(normalizeSearchResults(data, mode));
+  const normalizedResults = mergeMixedResultsByDocumentPage(mergeTextResultsByPage(normalizeSearchResults(data, mode)));
   const groupedResults = groupResultsByDocument(normalizedResults);
 
   if (!normalizedResults.length) {
