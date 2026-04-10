@@ -62,6 +62,7 @@ from app.models.search import (
     HybridSearchResponse,
     HybridImageSearchResult,
     ImageSearchResult,
+    ImageHybridSearchResponse,
 )
 from app.models.database import (
     DatabaseSettings,
@@ -2098,6 +2099,254 @@ async def search_documents_by_image(
         raise
     except Exception as e:
         logger.error(f"画像検索エラー: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search/image-hybrid", response_model=ImageHybridSearchResponse)
+async def search_documents_by_image_hybrid(
+    image: UploadFile = File(...),
+    query: Optional[str] = Form(None),
+    top_k: int = Form(10),
+    min_score: float = Form(0.7),
+    filename_filter: Optional[str] = Form(None),
+    vector_weight: float = Form(0.7),
+    keyword_weight: float = Form(0.3),
+    request: Request = None,
+):
+    """画像ベクトル + キーワードによるファイル単位ハイブリッド検索"""
+    try:
+        start_time = time.time()
+
+        if not image.content_type or not image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="画像ファイルを指定してください")
+
+        image_content = await image.read()
+        if not image_content:
+            raise HTTPException(status_code=400, detail="画像データが空です")
+
+        vector_weight = max(0.0, min(1.0, float(vector_weight)))
+        keyword_weight = max(0.0, min(1.0, float(keyword_weight)))
+        weight_sum = vector_weight + keyword_weight
+        if weight_sum <= 0:
+            vector_weight = 0.7
+            keyword_weight = 0.3
+            weight_sum = 1.0
+
+        normalized_vector_weight = vector_weight / weight_sum
+        normalized_keyword_weight = keyword_weight / weight_sum
+
+        image_stream = io.BytesIO(image_content)
+        query_embedding = await asyncio.to_thread(
+            image_vectorizer.generate_embedding,
+            image_stream,
+            image.content_type,
+        )
+        if query_embedding is None:
+            return ImageHybridSearchResponse(
+                success=False,
+                query=query,
+                results=[],
+                total=0,
+                total_files=0,
+                total_images=0,
+                message="画像embedding生成に失敗しました",
+                processing_time=time.time() - start_time,
+                weights={
+                    "vector_weight": normalized_vector_weight,
+                    "keyword_weight": normalized_keyword_weight,
+                },
+            )
+
+        image_rows = await image_vectorizer.search_similar_images_async(
+            query_embedding=query_embedding,
+            limit=max(top_k * 5, top_k),
+            threshold=min_score,
+            filename_filter=filename_filter,
+        ) or []
+
+        keyword_terms = [t for t in re.split(r"\s+", (query or "").strip()) if t]
+        text_rows = []
+        if keyword_terms:
+            if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
+                logger.info("Text RAG is disabled. 画像ハイブリッド検索ではキーワードスコアのみローカル評価を継続")
+            text_rows = await asyncio.to_thread(
+                database_service.search_text_chunks_by_keyword,
+                query,
+                max(top_k * 5, top_k),
+                filename_filter,
+            ) or []
+
+        from collections import defaultdict
+        from urllib.parse import quote
+
+        base_url = build_public_api_base_url(request)
+        temp_token = generate_temp_token(source="image_hybrid_search")
+        auth_query_param = f"?t={temp_token}"
+
+        def build_absolute_url(bucket: str, object_name: str) -> str:
+            encoded_name = quote(object_name, safe='/')
+            return f"{base_url}/object/{bucket}/{encoded_name}{auth_query_param}"
+
+        files_dict = defaultdict(lambda: {
+            "file_id": None,
+            "bucket": None,
+            "object_name": None,
+            "original_filename": None,
+            "file_size": None,
+            "content_type": None,
+            "uploaded_at": None,
+            "min_distance": float("inf"),
+            "images": [],
+            "scores": {
+                "image": 0.0,
+                "keyword": 0.0,
+            },
+            "keyword_matches": [],
+        })
+
+        for row in image_rows:
+            file_id = row["file_id"]
+            file_entry = files_dict[file_id]
+            if file_entry["file_id"] is None:
+                file_entry["file_id"] = row["file_id"]
+                file_entry["bucket"] = row["file_bucket"]
+                file_entry["object_name"] = row["file_object_name"]
+                file_entry["original_filename"] = row.get("original_filename")
+                file_entry["file_size"] = row.get("file_size")
+                file_entry["content_type"] = row.get("file_content_type")
+                file_entry["uploaded_at"] = row.get("uploaded_at")
+
+            distance = float(row["vector_distance"])
+            if distance < file_entry["min_distance"]:
+                file_entry["min_distance"] = distance
+                file_entry["scores"]["image"] = max(0.0, min(1.0, 1.0 - distance))
+
+            file_entry["images"].append(
+                ImageSearchResult(
+                    embed_id=row["embed_id"],
+                    bucket=row["bucket"],
+                    object_name=row["object_name"],
+                    page_number=row["page_number"],
+                    vector_distance=distance,
+                    content_type=row.get("content_type"),
+                    file_size=row.get("img_file_size"),
+                    url=build_absolute_url(row["bucket"], row["object_name"]),
+                )
+            )
+
+        keyword_scores_by_object = defaultdict(float)
+        keyword_matches_by_object = defaultdict(list)
+        for row in text_rows:
+            object_name = row.get("object_name")
+            if not object_name:
+                continue
+            score = text_rag_processor._keyword_score(query or "", row.get("chunk_text", ""))
+            if score <= 0:
+                continue
+            keyword_scores_by_object[object_name] = max(keyword_scores_by_object[object_name], score)
+            if len(keyword_matches_by_object[object_name]) < 3:
+                keyword_matches_by_object[object_name].append({
+                    "page_number": row.get("page_number"),
+                    "chunk_text": row.get("chunk_text", ""),
+                })
+
+        for file_entry in files_dict.values():
+            object_name = file_entry.get("object_name")
+            if object_name and object_name in keyword_scores_by_object:
+                file_entry["scores"]["keyword"] = keyword_scores_by_object[object_name]
+                file_entry["keyword_matches"] = keyword_matches_by_object[object_name]
+
+        if not files_dict and keyword_scores_by_object:
+            for object_name, keyword_score in keyword_scores_by_object.items():
+                keyword_rows_for_doc = keyword_matches_by_object.get(object_name, [])
+                first_text_row = next((row for row in text_rows if row.get("object_name") == object_name), None)
+                synthetic_file_id = f"kw::{object_name}"
+                files_dict[synthetic_file_id] = {
+                    "file_id": synthetic_file_id,
+                    "bucket": first_text_row.get("bucket") if first_text_row else "",
+                    "object_name": object_name,
+                    "original_filename": (first_text_row.get("original_filename") if first_text_row else object_name.split("/")[-1]),
+                    "file_size": None,
+                    "content_type": None,
+                    "uploaded_at": None,
+                    "min_distance": 1.0,
+                    "images": [],
+                    "scores": {
+                        "image": 0.0,
+                        "keyword": keyword_score,
+                    },
+                    "keyword_matches": keyword_rows_for_doc,
+                }
+
+        typed_results = []
+        for file_data in files_dict.values():
+            sorted_images = sorted(file_data["images"], key=lambda x: x.vector_distance)
+            hybrid_score = (
+                normalized_vector_weight * file_data["scores"].get("image", 0.0)
+                + normalized_keyword_weight * file_data["scores"].get("keyword", 0.0)
+            )
+            matched_images = sorted_images
+
+            if not matched_images and file_data["bucket"] and file_data["object_name"]:
+                fallback_images = []
+                for idx, match in enumerate(file_data.get("keyword_matches", []), start=1):
+                    page_number = match.get("page_number") or idx
+                    page_object_name = re.sub(r"\.[^.\/]+$", "", file_data["object_name"]) + f"/page_{int(page_number):03d}.png"
+                    fallback_images.append(
+                        ImageSearchResult(
+                            embed_id=-(idx),
+                            bucket=file_data["bucket"],
+                            object_name=page_object_name,
+                            page_number=int(page_number),
+                            vector_distance=1.0,
+                            url=build_absolute_url(file_data["bucket"], page_object_name),
+                        )
+                    )
+                matched_images = fallback_images
+
+            typed_results.append(
+                HybridImageSearchResult(
+                    source_type="image",
+                    file_id=file_data["file_id"] if isinstance(file_data["file_id"], int) else -1,
+                    bucket=file_data["bucket"],
+                    object_name=file_data["object_name"],
+                    original_filename=file_data["original_filename"],
+                    file_size=file_data["file_size"],
+                    content_type=file_data["content_type"],
+                    uploaded_at=file_data["uploaded_at"],
+                    min_distance=file_data["min_distance"],
+                    matched_images=matched_images,
+                    url=build_absolute_url(file_data["bucket"], file_data["object_name"]) if file_data["bucket"] and file_data["object_name"] else None,
+                    hybrid_score=hybrid_score,
+                    scores={
+                        "image": file_data["scores"].get("image", 0.0),
+                        "keyword": file_data["scores"].get("keyword", 0.0),
+                    },
+                )
+            )
+
+        typed_results.sort(key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0, reverse=True)
+        typed_results = typed_results[:top_k]
+
+        processing_time = time.time() - start_time
+        return ImageHybridSearchResponse(
+            success=True,
+            query=query,
+            results=typed_results,
+            total=len(typed_results),
+            total_files=len(typed_results),
+            total_images=sum(len(r.matched_images) for r in typed_results),
+            processing_time=processing_time,
+            weights={
+                "vector_weight": normalized_vector_weight,
+                "keyword_weight": normalized_keyword_weight,
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"画像ハイブリッド検索エラー: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

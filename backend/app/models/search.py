@@ -69,6 +69,20 @@ class HybridSearchQuery(TextSearchQuery):
     keyword_weight: Optional[float] = 0.3
 
 
+class ImageHybridSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: Optional[str] = None
+    results: List[HybridImageSearchResult]
+    total: int
+    total_files: Optional[int] = None
+    total_images: Optional[int] = None
+    message: Optional[str] = None
+    processing_time: Optional[float] = None
+    weights: Optional[dict] = None
+
+
 class TextChunkSearchResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
