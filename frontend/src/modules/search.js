@@ -856,9 +856,9 @@ export async function performSearch() {
         : (retrievalMode === 'image-hybrid' ? '画像ハイブリッド検索中...' : '画像検索中...'));
     utilsShowLoading(loadingLabel);
 
-    if (retrievalMode === 'image-hybrid' && currentSearchType === 'text') {
+    if (retrievalMode === 'image-hybrid' && currentSearchType === 'image') {
       utilsHideLoading();
-      utilsShowToast('image-hybrid は画像検索タブから実行してください', 'warning');
+      utilsShowToast('image-hybrid はテキスト検索タブから実行してください', 'warning');
       return;
     }
     
