@@ -608,8 +608,10 @@ if [ -d "$PROJECT_DIR" ]; then
     cd "${PROJECT_DIR}/frontend"
     
     rm -f .env.development
+    # nginx が /ai/api を backend に中継するため、本番UIは相対パスを使用する
     echo "VITE_API_BASE=" > .env.production
     echo "VITE_API_BASE=" > .env
+    echo "FRONTEND_PORT=5175" >> .env
     
     # Ensure npm install succeeds
     echo "npm install を実行中..."
@@ -898,13 +900,14 @@ echo "セマンティック文書検索バックエンドサービスを起動�
 # 環境変数からAPI_HOSTとAPI_PORTを読み取る（デフォルト値付き）
 API_HOST=${API_HOST:-0.0.0.0}
 API_PORT=${API_PORT:-8081}
+FRONTEND_PORT=${FRONTEND_PORT:-5175}
 nohup uv run --directory backend uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" > /var/log/app-backend.log 2>&1 &
 
 sleep 5
 
 echo "セマンティック文書検索フロントエンドサービスを起動中..."
 cd /u01/aipoc/no.1-semantic-doc-search/frontend
-nohup npm run preview -- --host 0.0.0.0 --port 5175 > /var/log/app-frontend.log 2>&1 &
+nohup npm run preview -- --host 0.0.0.0 --port "${FRONTEND_PORT}" > /var/log/app-frontend.log 2>&1 &
 
 echo "セマンティック文書検索サービスが起動しました。"
 EOF

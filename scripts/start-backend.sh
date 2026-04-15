@@ -11,9 +11,20 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../" && pwd)"
 cd "$ROOT_DIR"
 
-# .envファイルから環境変数を読み込み
+# .envファイルから環境変数を安全に読み込み
 if [ -f "$ROOT_DIR/.env" ]; then
-  export $(grep -v '^#' "$ROOT_DIR/.env" | xargs)
+  set -a
+  # shellcheck disable=SC1090
+  . "$ROOT_DIR/.env"
+  set +a
+fi
+
+# backend/.env が存在する場合はルート .env より優先して上書き
+if [ -f "$ROOT_DIR/backend/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT_DIR/backend/.env"
+  set +a
 fi
 
 # Oracle Client環境変数を設定
@@ -37,7 +48,7 @@ if [ -n "${TNS_ADMIN:-}" ]; then
   echo "  TNS_ADMIN: ${TNS_ADMIN}"
 fi
 
-PORT="${BACKEND_PORT:-8081}"
+PORT="${BACKEND_PORT:-${API_PORT:-8081}}"
 
 echo "[バックエンド] FastAPI dev serverをポート ${PORT} で起動中..."
 
