@@ -4,7 +4,7 @@
 
 - v1.13.0: 大阪リージョンのみをサポートしています。（デフォルト：大阪リージョン）
 
-  Click [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/yushibats/no.1-semantic-doc-search/releases/download/v1.13.1-test/v.1.13.1v2.zip)
+  Click [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/yushibats/no.1-semantic-doc-search/releases/download/v1.13.1-test/v.1.13.1v3.zip)
 
 
 ## ネットワーク設定
