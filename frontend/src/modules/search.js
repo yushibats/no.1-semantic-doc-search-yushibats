@@ -49,12 +49,15 @@ function buildMetricRows(metricEntries = []) {
     .filter((entry) => entry && (entry.score !== null && entry.score !== undefined || entry.distance !== null && entry.distance !== undefined || entry.extra))
     .map((entry) => {
       const extra = entry.extra ? `<span class="search-result-metric-extra">${safeText(entry.extra)}</span>` : '';
+      const distancePill = entry.distance === null || entry.distance === undefined || Number.isNaN(entry.distance)
+        ? ''
+        : `<span class="search-result-metric-pill">距離: ${formatMetricValue(entry.distance, formatDistance)}</span>`;
       return `
         <div class="search-result-metric-row">
           <div class="search-result-metric-name">${safeMetricLabel(entry.label)}</div>
           <div class="search-result-metric-values">
             <span class="search-result-metric-pill">score: ${formatMetricValue(entry.score, formatMatchPercent)}</span>
-            <span class="search-result-metric-pill">距離: ${formatMetricValue(entry.distance, formatDistance)}</span>
+            ${distancePill}
             ${extra}
           </div>
         </div>
@@ -114,16 +117,10 @@ function getModeMetricEntries(item, mode) {
         extra: item._merged_chunk_count ? `chunk: ${item._merged_chunk_count}` : ''
       },
       {
-        label: 'keyword',
-        score: scores.keyword ?? null,
-        distance: null,
-        extra: Array.isArray(item.keyword_matches) && item.keyword_matches.length ? `一致: ${item.keyword_matches.length}件` : ''
-      },
-      {
         label: 'total',
         score: raw.hybrid_score ?? scores.total ?? item.score,
         distance: null,
-        extra: raw.weights ? `weight vector:${formatMetricValue(raw.weights.vector_weight, v => `${(v * 100).toFixed(0)}%`)} / keyword:${formatMetricValue(raw.weights.keyword_weight, v => `${(v * 100).toFixed(0)}%`)}` : ''
+        extra: raw.weights ? `weight vector:${formatMetricValue(raw.weights.vector_weight ?? raw.weights.image_weight, v => `${(v * 100).toFixed(0)}%`)}` : ''
       }
     ];
   }
@@ -171,7 +168,6 @@ function getResultMatchTabs(item, mode) {
   if (mode === 'image-text-vector' || mode === 'hybrid') {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
     if (hasTextMatch) tabs.push({ key: 'text', label: 'text' });
-    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
     return tabs;
   }
 
@@ -752,12 +748,10 @@ function renderDocumentGroupCard(group, groupIndex) {
       <div class="search-doc-group-body">
         ${groupMetricPanel ? `
           <div class="search-doc-group-section">
-            <div class="search-doc-group-section-title"><i class="fas fa-chart-line"></i> 検索詳細</div>
             ${groupMetricPanel}
           </div>
         ` : ''}
 
-        <div class="search-doc-group-body-title"><i class="far fa-images"></i> マッチした項目（距離が小さい順・text/image混合）</div>
         <div class="search-doc-group-entries">
           ${group.entries.map(({ item, index }) => renderResultCard(item, index, { compact: true, mode })).join('')}
         </div>
