@@ -927,7 +927,17 @@ echo "セマンティック文書検索バックエンドサービスを起動�
 API_HOST=${API_HOST:-0.0.0.0}
 API_PORT=${API_PORT:-8081}
 FRONTEND_PORT=${FRONTEND_PORT:-5175}
-nohup uv run --directory backend uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" > /var/log/app-backend.log 2>&1 &
+UV_BIN="$(command -v uv || true)"
+if [ -z "$UV_BIN" ] && [ -x /root/.local/bin/uv ]; then
+  UV_BIN="/root/.local/bin/uv"
+fi
+
+if [ -z "$UV_BIN" ]; then
+  echo "[起動スクリプト] ERROR: uv が見つかりません" > /var/log/app-backend.log
+  exit 1
+fi
+
+nohup "$UV_BIN" run --directory backend uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" > /var/log/app-backend.log 2>&1 &
 
 sleep 5
 

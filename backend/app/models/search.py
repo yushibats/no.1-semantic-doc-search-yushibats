@@ -69,20 +69,6 @@ class ImageTextVectorSearchQuery(TextSearchQuery):
     keyword_weight: Optional[float] = 0.3
 
 
-class ImageTextKeywordSearchResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    success: bool
-    query: Optional[str] = None
-    results: List[HybridImageSearchResult]
-    total: int
-    total_files: Optional[int] = None
-    total_images: Optional[int] = None
-    message: Optional[str] = None
-    processing_time: Optional[float] = None
-    weights: Optional[dict] = None
-
-
 class ImageTextKeywordSearchQuery(TextSearchQuery):
     """キーワード入力で画像ベクトル + TEXT_CHUNKSキーワード検索を行うクエリ"""
     image_weight: Optional[float] = 0.7
@@ -125,6 +111,20 @@ class HybridImageSearchResult(BaseModel):
     hybrid_score: Optional[float] = None
     scores: Optional[dict] = None
     keyword_matches: Optional[List[dict]] = None
+
+
+class ImageTextKeywordSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: Optional[str] = None
+    results: List[HybridImageSearchResult]
+    total: int
+    total_files: Optional[int] = None
+    total_images: Optional[int] = None
+    message: Optional[str] = None
+    processing_time: Optional[float] = None
+    weights: Optional[dict] = None
 
 
 HybridSearchResult = Union[TextChunkSearchResult, HybridImageSearchResult]

@@ -11,6 +11,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../" && pwd)"
 cd "$ROOT_DIR"
 
+export PATH="/root/.local/bin:${PATH}"
+
 # .envファイルから環境変数を安全に読み込み
 if [ -f "$ROOT_DIR/.env" ]; then
   set -a
@@ -52,7 +54,12 @@ PORT="${BACKEND_PORT:-${API_PORT:-8081}}"
 
 echo "[バックエンド] FastAPI dev serverをポート ${PORT} で起動中..."
 
-if ! command -v uv >/dev/null 2>&1; then
+UV_BIN="$(command -v uv || true)"
+if [ -z "$UV_BIN" ] && [ -x "/root/.local/bin/uv" ]; then
+  UV_BIN="/root/.local/bin/uv"
+fi
+
+if [ -z "$UV_BIN" ]; then
   echo "[バックエンド] ERROR: 'uv' が見つかりません。" 1>&2
   echo "         uvをインストール:  curl -LsSf https://astral.sh/uv/install.sh | sh" 1>&2
   exit 1
@@ -74,7 +81,7 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 
 echo "[バックエンド] Python依存関係をuvで同期中 (backend/)"
-uv sync --directory backend
+"$UV_BIN" sync --directory backend
 
 echo "[バックエンド] uvicorn app.main:app を自動リロードで起動 (0.0.0.0:${PORT})"
-exec uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"
+exec "$UV_BIN" run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"
