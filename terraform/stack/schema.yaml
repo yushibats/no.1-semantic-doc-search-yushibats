@@ -38,6 +38,8 @@ variableGroups:
       - oci_bucket_name
       - show_ai_assistant
       - show_search_tab
+      - enable_text_rag
+      - search_mode
       - enable_dify
 
   - title: Dify Configuration
@@ -191,6 +193,27 @@ variables:
     title: "Show Search Tab"
     description: "Control Search tab visibility (true: show, false: hide)"
     default: true
+
+  enable_text_rag:
+    type: boolean
+    required: true
+    visible: true
+    title: "Enable Text RAG"
+    description: "Enable text-based RAG indexing/search features"
+    default: false
+
+  search_mode:
+    type: enum
+    required: true
+    visible: true
+    title: "Search Mode"
+    description: "Select search mode exposed by the application"
+    enum:
+      - "image"
+      - "text"
+      - "hybrid"
+      - "all"
+    default: "image"
 
   enable_dify:
     type: boolean

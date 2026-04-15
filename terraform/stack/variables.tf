@@ -132,3 +132,20 @@ variable "show_search_tab" {
   type        = bool
   default     = true
 }
+
+variable "enable_text_rag" {
+  description = "テキストRAG機能の有効化 (true: 有効, false: 無効)"
+  type        = bool
+  default     = false
+}
+
+variable "search_mode" {
+  description = "検索モード (image | text | hybrid | all)"
+  type        = string
+  default     = "image"
+
+  validation {
+    condition     = contains(["image", "text", "hybrid", "all"], var.search_mode)
+    error_message = "search_mode must be one of: image, text, hybrid, all."
+  }
+}

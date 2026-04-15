@@ -501,20 +501,20 @@ class ImageVectorizer:
             if not self._ensure_pool_initialized():
                 logger.error("接続プールの初期化に失敗")
                 return False
-            
+
             with self._get_pool_manager().acquire_connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("""
-                        DELETE FROM IMG_EMBEDDINGS 
+                        DELETE FROM IMG_EMBEDDINGS
                         WHERE FILE_ID = :file_id
                     """, {'file_id': file_id})
-                    
+
                     deleted_count = cursor.rowcount
                     connection.commit()
-                    
+
                     logger.info(f"FILE_ID={file_id}のembedding削除完了: {deleted_count}件")
                     return True
-                
+
         except Exception as e:
             logger.error(f"Embedding削除エラー: {e}")
             return False

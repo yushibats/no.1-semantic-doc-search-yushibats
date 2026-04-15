@@ -589,6 +589,32 @@ if [ -d "$PROJECT_DIR" ]; then
         fi
     fi
 
+    # Set ENABLE_TEXT_RAG (if available)
+    if [ -f "${INSTALL_DIR}/props/enable_text_rag.txt" ]; then
+        ENABLE_TEXT_RAG=$(cat "${INSTALL_DIR}/props/enable_text_rag.txt" | xargs)
+        if [ -n "$ENABLE_TEXT_RAG" ]; then
+            if grep -q "^ENABLE_TEXT_RAG=" .env; then
+                sed -i "s|^ENABLE_TEXT_RAG=.*|ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}|g" .env
+            else
+                echo "ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}" >> .env
+            fi
+            echo "Text RAG有効化: ${ENABLE_TEXT_RAG}"
+        fi
+    fi
+
+    # Set SEARCH_MODE (if available)
+    if [ -f "${INSTALL_DIR}/props/search_mode.txt" ]; then
+        SEARCH_MODE=$(cat "${INSTALL_DIR}/props/search_mode.txt" | xargs)
+        if [ -n "$SEARCH_MODE" ]; then
+            if grep -q "^SEARCH_MODE=" .env; then
+                sed -i "s|^SEARCH_MODE=.*|SEARCH_MODE=${SEARCH_MODE}|g" .env
+            else
+                echo "SEARCH_MODE=${SEARCH_MODE}" >> .env
+            fi
+            echo "検索モード: ${SEARCH_MODE}"
+        fi
+    fi
+
     # Setup backend with Python 3.13
     echo "Python 3.13でバックエンドをセットアップ中..."
     cd "${PROJECT_DIR}"
@@ -608,8 +634,10 @@ if [ -d "$PROJECT_DIR" ]; then
     cd "${PROJECT_DIR}/frontend"
     
     rm -f .env.development
+    # nginx が /ai/api を backend に中継するため、本番UIは相対パスを使用する
     echo "VITE_API_BASE=" > .env.production
     echo "VITE_API_BASE=" > .env
+    echo "FRONTEND_PORT=5175" >> .env
     
     # Ensure npm install succeeds
     echo "npm install を実行中..."
@@ -898,13 +926,14 @@ echo "セマンティック文書検索バックエンドサービスを起動�
 # 環境変数からAPI_HOSTとAPI_PORTを読み取る（デフォルト値付き）
 API_HOST=${API_HOST:-0.0.0.0}
 API_PORT=${API_PORT:-8081}
+FRONTEND_PORT=${FRONTEND_PORT:-5175}
 nohup uv run --directory backend uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" > /var/log/app-backend.log 2>&1 &
 
 sleep 5
 
 echo "セマンティック文書検索フロントエンドサービスを起動中..."
 cd /u01/aipoc/no.1-semantic-doc-search/frontend
-nohup npm run preview -- --host 0.0.0.0 --port 5175 > /var/log/app-frontend.log 2>&1 &
+nohup npm run preview -- --host 0.0.0.0 --port "${FRONTEND_PORT}" > /var/log/app-frontend.log 2>&1 &
 
 echo "セマンティック文書検索サービスが起動しました。"
 EOF

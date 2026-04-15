@@ -298,6 +298,9 @@ export function displayOciObjectsList(data) {
   const hasSelection = selectedOciObjects.length > 0;
   const canSelectAction = !isProcessing; // 選択操作は処理中以外は常に可能
   const canExecuteAction = hasSelection; // 実行操作は選択がある場合のみ可能（処理中でもボタンは活性化）
+  const enableTextRag = appState.get('enableTextRag');
+  const searchMode = appState.get('searchMode') || 'image';
+  const canUseTextIndex = !!enableTextRag || ['text', 'hybrid', 'all'].includes(searchMode);
   
   // 選択ボタンHTML
   const selectionButtonsHtml = `
@@ -349,6 +352,14 @@ export function displayOciObjectsList(data) {
         title="${canExecuteAction ? `選択されたファイルの画像をベクトル化してDBに保存: ${selectedOciObjects.length}件` : 'ベクトル化するファイルを選択してください'}"
       >
         ベクトル化 (${selectedOciObjects.length}件)
+      </button>
+      <button 
+        class="apex-button-secondary px-4 py-2 ${(canExecuteAction && canUseTextIndex) ? '' : 'opacity-40 cursor-not-allowed'}" 
+        onclick="window.ociModule.indexTextSelected()" 
+        ${(canExecuteAction && canUseTextIndex) ? '' : 'disabled'}
+        title="${!canUseTextIndex ? 'テキスト索引化は現在の設定で無効です（ENABLE_TEXT_RAG または SEARCH_MODE を確認してください）' : (canExecuteAction ? `選択されたファイルをテキスト索引化（TEXT_CHUNKS）: ${selectedOciObjects.length}件` : '索引化するファイルを選択してください')}"
+      >
+        テキスト索引化 (${selectedOciObjects.length}件)
       </button>
     </div>
   `;
@@ -428,6 +439,7 @@ export function displayOciObjectsList(data) {
               <th>作成日時</th>
               <th style="text-align: center;" class="hidden">ページ画像化</th>
               <th style="text-align: center;">ベクトル化</th>
+              <th style="text-align: center;">索引化</th>
             </tr>
           </thead>
           <tbody>
@@ -491,6 +503,12 @@ function generateObjectRow(obj, allOciObjects, selectedOciObjects, ociObjectsBat
   const embeddingsStatusHtml = (isPageImage || hasEmbeddings == null) ? '' :
     (hasEmbeddings ? '<span class="badge badge-success">完了</span>' : 
     '<span class="badge badge-neutral">未実行</span>');
+
+  // テキスト索引化状態（ページ画像の場合は空表示）
+  const hasTextIndex = obj.has_text_index;
+  const textIndexStatusHtml = (isPageImage || hasTextIndex == null) ? '' :
+    (hasTextIndex ? '<span class="badge badge-success">完了</span>' :
+    '<span class="badge badge-neutral">未実行</span>');
   
   return `
     <tr>
@@ -511,6 +529,7 @@ function generateObjectRow(obj, allOciObjects, selectedOciObjects, ociObjectsBat
       <td>${obj.time_created || '-'}</td>
       <td style="text-align: center;" class="hidden">${pageImagesStatusHtml}</td>
       <td style="text-align: center;">${embeddingsStatusHtml}</td>
+      <td style="text-align: center;">${textIndexStatusHtml}</td>
     </tr>
   `;
 }
@@ -1110,6 +1129,104 @@ export async function vectorizeSelectedOciObjects() {
     // 選択をクリアして一覧を更新
     appState.set('selectedOciObjects', []);
     await loadOciObjects();
+  }
+}
+
+/**
+ * 選択されたOCIオブジェクト（PDF/DOCX）をテキスト索引化し、TEXT_CHUNKSに保存します。
+ * フォルダが選択されている場合は配下のファイルを展開します。
+ *
+ * @async
+ * @returns {Promise<void>}
+ */
+export async function indexTextSelectedOciObjects() {
+  const enableTextRag = appState.get('enableTextRag');
+  const searchMode = appState.get('searchMode') || 'image';
+  const canUseTextIndex = !!enableTextRag || ['text', 'hybrid', 'all'].includes(searchMode);
+  if (!canUseTextIndex) {
+    utilsShowToast('テキスト索引化は現在の設定で無効です（ENABLE_TEXT_RAG / SEARCH_MODE を確認してください）', 'warning');
+    return;
+  }
+
+  const selectedOciObjects = getSelectedOciObjects();
+
+  if (selectedOciObjects.length === 0) {
+    utilsShowToast('テキスト索引化するファイルを選択してください', 'warning');
+    return;
+  }
+
+  const ociObjectsBatchDeleteLoading = appState.get('ociObjectsBatchDeleteLoading');
+  if (ociObjectsBatchDeleteLoading) {
+    utilsShowToast('処理中です。しばらくお待ちください', 'warning');
+    return;
+  }
+
+  const allOciObjects = appState.get('allOciObjects') || [];
+  const expandableTargets = new Set();
+
+  selectedOciObjects.forEach((name) => {
+    if (!name) return;
+    if (name.endsWith('/')) {
+      allOciObjects
+        .filter(obj => obj?.name && obj.name.startsWith(name) && !obj.name.endsWith('/'))
+        .forEach(obj => expandableTargets.add(obj.name));
+    } else {
+      expandableTargets.add(name);
+    }
+  });
+
+  const indexableObjectNames = [...expandableTargets].filter((name) => {
+    if (isGeneratedPageImage(name, allOciObjects)) return false;
+    const ext = name.toLowerCase().split('.').pop();
+    return ext === 'pdf' || ext === 'docx';
+  });
+
+  if (indexableObjectNames.length === 0) {
+    utilsShowToast('索引化対象がありません（PDF/DOCXファイルを選択してください）', 'warning');
+    return;
+  }
+
+  const confirmed = await utilsShowConfirmModal(
+    `選択された対象から <strong>${indexableObjectNames.length}件</strong> のPDF/DOCXをテキスト索引化します。<br><small>TEXT_CHUNKSに保存され、text/hybrid検索で利用できます。</small><br>実行しますか？`,
+    'テキスト索引化確認'
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    appState.set('ociObjectsBatchDeleteLoading', true);
+    utilsShowLoading(`テキスト索引化を実行中...\n対象: ${indexableObjectNames.length}件`);
+
+    const data = await authApiCall('/ai/api/documents/index-text', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        object_names: indexableObjectNames,
+        max_chars: 1200
+      }),
+      timeout: 120000
+    });
+
+    utilsHideLoading();
+    appState.set('ociObjectsBatchDeleteLoading', false);
+
+    const successCount = data?.success_count ?? 0;
+    const failedCount = data?.failed_count ?? 0;
+    const total = data?.total ?? indexableObjectNames.length;
+    const message = `テキスト索引化完了: 成功 ${successCount}件 / 失敗 ${failedCount}件 (合計 ${total}件)`;
+
+    utilsShowToast(message, failedCount > 0 ? 'warning' : 'success');
+    await loadOciObjects(false);
+  } catch (error) {
+    utilsHideLoading();
+    appState.set('ociObjectsBatchDeleteLoading', false);
+    console.error('テキスト索引化エラー:', error);
+    utilsShowToast(`テキスト索引化エラー: ${error.message}`, 'error');
+    await loadOciObjects(false);
   }
 }
 
@@ -2008,6 +2125,7 @@ window.ociModule = {
   downloadSelected: downloadSelectedOciObjects,
   convertToImages: convertSelectedOciObjectsToImages,
   vectorizeSelected: vectorizeSelectedOciObjects,
+  indexTextSelected: indexTextSelectedOciObjects,
   deleteSelected: deleteSelectedOciObjects,
   closeProcessProgress: closeProcessProgress,
   showImagePreview
@@ -2032,6 +2150,7 @@ export default {
   downloadSelectedOciObjects,
   convertSelectedOciObjectsToImages,
   vectorizeSelectedOciObjects,
+  indexTextSelectedOciObjects,
   deleteSelectedOciObjects
 };
 

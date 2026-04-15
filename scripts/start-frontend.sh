@@ -16,6 +16,21 @@ cd "$ROOT_DIR"
 
 PORT="${FRONTEND_PORT:-5175}"
 
+# ルート/フロントエンド配下のenvを読み込み（必要ならVITE_*を上書き可能にする）
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ROOT_DIR/.env"
+  set +a
+fi
+
+if [ -f "$ROOT_DIR/frontend/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT_DIR/frontend/.env"
+  set +a
+fi
+
 if ! command -v node >/dev/null 2>&1; then
   echo "[フロントエンド] ERROR: 'node' が見つかりません (Node.js 18+ をインストールしてください)" 1>&2
   exit 1
@@ -26,7 +41,7 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[フロントエンド] Vite Proxyを使用してバックエンドに接続 (/api -> http://localhost:8081)"
+echo "[フロントエンド] Vite Proxyを使用してバックエンドに接続 (/ai/api -> http://localhost:${BACKEND_PORT:-${API_PORT:-8081}})"
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -PiTCP:"$PORT" -sTCP:LISTEN -t || true)"

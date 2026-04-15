@@ -93,6 +93,8 @@ export async function loadConfig() {
       // appStateに設定（oci.js等のモジュールから参照されるため）
       appState.set('debugMode', config.debug);
       appState.set('requireLogin', config.require_login);
+      appState.set('enableTextRag', !!config.enable_text_rag);
+      appState.set('searchMode', config.search_mode || 'image');
       appState.set('apiBase', API_BASE);
       
       // UI機能トグルを適用
@@ -488,6 +490,11 @@ export async function fetchWithAuth(endpoint, options = {}) {
 
     if (error.name === 'AbortError') {
       throw new Error('リクエストがタイムアウトしました。データベースが起動していない可能性があります。');
+    }
+
+    // ネットワーク未接続・プロキシ未到達時（ブラウザ標準の "Failed to fetch"）
+    if (error instanceof TypeError && /Failed to fetch/i.test(error.message || '')) {
+      throw new Error('APIに接続できませんでした（Failed to fetch）。バックエンド起動状態・ポート（8081）・Viteプロキシ設定を確認してください。');
     }
 
     throw error;

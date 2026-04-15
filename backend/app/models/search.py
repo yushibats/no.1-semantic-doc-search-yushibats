@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -47,3 +47,120 @@ class SearchResponse(BaseModel):
     total_files: int  # マッチしたファイル数
     total_images: int  # マッチした画像数
     processing_time: float  # 秒
+
+
+class TextIndexRequest(BaseModel):
+    """テキスト索引化リクエスト"""
+    object_names: List[str]
+    max_chars: Optional[int] = 1200
+
+
+class TextSearchQuery(BaseModel):
+    """テキスト検索クエリ"""
+    query: str
+    top_k: Optional[int] = 10
+    min_score: Optional[float] = 0.7
+    filename_filter: Optional[str] = None
+
+
+class ImageTextVectorSearchQuery(TextSearchQuery):
+    """画像ベクトル + テキストベクトル検索クエリ"""
+    vector_weight: Optional[float] = 0.7
+    keyword_weight: Optional[float] = 0.3
+
+
+class ImageTextKeywordSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: Optional[str] = None
+    results: List[HybridImageSearchResult]
+    total: int
+    total_files: Optional[int] = None
+    total_images: Optional[int] = None
+    message: Optional[str] = None
+    processing_time: Optional[float] = None
+    weights: Optional[dict] = None
+
+
+class ImageTextKeywordSearchQuery(TextSearchQuery):
+    """キーワード入力で画像ベクトル + TEXT_CHUNKSキーワード検索を行うクエリ"""
+    image_weight: Optional[float] = 0.7
+    keyword_weight: Optional[float] = 0.3
+
+
+class TextChunkSearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_id: int
+    bucket: Optional[str] = None
+    object_name: str
+    original_filename: Optional[str] = None
+    chunk_index: int
+    page_number: Optional[int] = None
+    chunk_text: str
+    char_count: Optional[int] = None
+    vector_distance: Optional[float] = None
+    vector_score: Optional[float] = None
+    hybrid_score: Optional[float] = None
+    scores: Optional[dict] = None
+    source_type: Optional[str] = "text"
+    file_url: Optional[str] = None
+
+
+class HybridImageSearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source_type: str = "image"
+    file_id: int
+    bucket: str
+    object_name: str
+    original_filename: Optional[str] = None
+    file_size: Optional[int] = None
+    content_type: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    min_distance: float
+    matched_images: List[ImageSearchResult]
+    url: Optional[str] = None
+    hybrid_score: Optional[float] = None
+    scores: Optional[dict] = None
+    keyword_matches: Optional[List[dict]] = None
+
+
+HybridSearchResult = Union[TextChunkSearchResult, HybridImageSearchResult]
+
+
+class HybridSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: str
+    results: List[HybridSearchResult]
+    total: int
+    message: Optional[str] = None
+    processing_time: Optional[float] = None
+    weights: Optional[dict] = None
+
+
+class TextSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    query: str
+    results: List[TextChunkSearchResult]
+    total: int
+    message: Optional[str] = None
+
+
+class TextIndexResponse(BaseModel):
+    success: bool
+    total: int
+    success_count: int
+    failed_count: int
+    results: List[dict]
+
+
+# backward compatible aliases
+HybridSearchQuery = ImageTextVectorSearchQuery
+ImageHybridSearchResponse = ImageTextKeywordSearchResponse
+KeywordImageHybridSearchQuery = ImageTextKeywordSearchQuery
