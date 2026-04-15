@@ -142,10 +142,10 @@ function getRetrievalModeLabel(mode) {
   switch (mode) {
     case 'image-text-vector':
     case 'hybrid':
-      return 'image×text(vector)';
+      return 'image×text';
     case 'image-text-keyword':
     case 'image-hybrid':
-      return 'image×text(keyword)';
+      return 'image×keyword';
     default:
       return mode || 'image';
   }
@@ -164,7 +164,7 @@ function getResultMatchTabs(item, mode) {
 
   if (mode === 'image-text-keyword' || mode === 'image-hybrid') {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
-    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'text(keyword)' });
+    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
     return tabs;
   }
 
@@ -922,7 +922,7 @@ export async function performImageSearch() {
     const retrievalModeElement = document.getElementById('retrievalMode');
     const retrievalMode = retrievalModeElement?.value || currentRetrievalMode || 'image';
     if (retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') {
-      utilsShowToast('image×text(keyword) はキーワード入力から実行してください', 'warning');
+      utilsShowToast('image×keyword はキーワード入力から実行してください', 'warning');
       return;
     }
     setRetrievalMode(retrievalMode);
@@ -1052,15 +1052,15 @@ export async function performSearch() {
 
   try {
     const loadingLabel = (retrievalMode === 'image-text-vector' || retrievalMode === 'hybrid')
-      ? 'image×text(vector) 検索中...'
+      ? 'image×text 検索中...'
       : (retrievalMode === 'text'
         ? 'テキスト検索中...'
-        : ((retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') ? 'image×text(keyword) 検索中...' : '画像検索中...'));
+        : ((retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') ? 'image×keyword 検索中...' : '画像検索中...'));
     utilsShowLoading(loadingLabel);
 
     if ((retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') && currentSearchType === 'image') {
       utilsHideLoading();
-      utilsShowToast('image×text(keyword) はテキスト検索タブから実行してください', 'warning');
+      utilsShowToast('image×keyword はテキスト検索タブから実行してください', 'warning');
       return;
     }
     
