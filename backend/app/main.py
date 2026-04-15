@@ -57,6 +57,7 @@ from app.models.search import (
     TextIndexResponse,
     TextSearchQuery,
     ImageTextVectorSearchQuery,
+    HybridSearchQuery,
     TextSearchResponse,
     TextChunkSearchResult,
     HybridSearchResponse,
@@ -64,6 +65,8 @@ from app.models.search import (
     ImageSearchResult,
     ImageTextKeywordSearchResponse,
     ImageTextKeywordSearchQuery,
+    ImageHybridSearchResponse,
+    KeywordImageHybridSearchQuery,
 )
 from app.models.database import (
     DatabaseSettings,
