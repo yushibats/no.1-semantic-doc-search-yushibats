@@ -76,6 +76,14 @@ write_files:
     permissions: "0644"
     content: |
       ${show_search_tab}
+  - path: "/u01/aipoc/props/enable_text_rag.txt"
+    permissions: "0644"
+    content: |
+      ${enable_text_rag}
+  - path: "/u01/aipoc/props/search_mode.txt"
+    permissions: "0644"
+    content: |
+      ${search_mode}
   - path: "/u01/aipoc/props/compute_subnet_is_private.txt"
     permissions: "0644"
     content: |

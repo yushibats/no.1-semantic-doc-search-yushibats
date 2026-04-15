@@ -589,6 +589,32 @@ if [ -d "$PROJECT_DIR" ]; then
         fi
     fi
 
+    # Set ENABLE_TEXT_RAG (if available)
+    if [ -f "${INSTALL_DIR}/props/enable_text_rag.txt" ]; then
+        ENABLE_TEXT_RAG=$(cat "${INSTALL_DIR}/props/enable_text_rag.txt" | xargs)
+        if [ -n "$ENABLE_TEXT_RAG" ]; then
+            if grep -q "^ENABLE_TEXT_RAG=" .env; then
+                sed -i "s|^ENABLE_TEXT_RAG=.*|ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}|g" .env
+            else
+                echo "ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}" >> .env
+            fi
+            echo "Text RAG有効化: ${ENABLE_TEXT_RAG}"
+        fi
+    fi
+
+    # Set SEARCH_MODE (if available)
+    if [ -f "${INSTALL_DIR}/props/search_mode.txt" ]; then
+        SEARCH_MODE=$(cat "${INSTALL_DIR}/props/search_mode.txt" | xargs)
+        if [ -n "$SEARCH_MODE" ]; then
+            if grep -q "^SEARCH_MODE=" .env; then
+                sed -i "s|^SEARCH_MODE=.*|SEARCH_MODE=${SEARCH_MODE}|g" .env
+            else
+                echo "SEARCH_MODE=${SEARCH_MODE}" >> .env
+            fi
+            echo "検索モード: ${SEARCH_MODE}"
+        fi
+    fi
+
     # Setup backend with Python 3.13
     echo "Python 3.13でバックエンドをセットアップ中..."
     cd "${PROJECT_DIR}"

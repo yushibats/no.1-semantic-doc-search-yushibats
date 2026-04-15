@@ -30,6 +30,8 @@ data "template_file" "cloud_init_file" {
     external_api_keys         = var.external_api_keys
     show_ai_assistant         = var.show_ai_assistant
     show_search_tab           = var.show_search_tab
+    enable_text_rag           = tostring(var.enable_text_rag)
+    search_mode               = var.search_mode
     compute_subnet_is_private = tostring(local.compute_subnet_prohibits_public_ip)
   }
 }
