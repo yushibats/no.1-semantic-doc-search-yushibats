@@ -56,14 +56,14 @@ from app.models.search import (
     TextIndexRequest,
     TextIndexResponse,
     TextSearchQuery,
-    HybridSearchQuery,
+    ImageTextVectorSearchQuery,
     TextSearchResponse,
     TextChunkSearchResult,
     HybridSearchResponse,
     HybridImageSearchResult,
     ImageSearchResult,
-    ImageHybridSearchResponse,
-    KeywordImageHybridSearchQuery,
+    ImageTextKeywordSearchResponse,
+    ImageTextKeywordSearchQuery,
 )
 from app.models.database import (
     DatabaseSettings,
@@ -1914,6 +1914,12 @@ async def search_hybrid_documents(query: HybridSearchQuery, request: Request):
     )
 
 
+@app.post("/search/image-text-vector", response_model=HybridSearchResponse)
+async def search_image_text_vector_documents(query: ImageTextVectorSearchQuery, request: Request):
+    """画像ベクトル + テキストベクトル検索（新名称エンドポイント）"""
+    return await search_hybrid_documents(query, request)
+
+
 @app.post("/search/image", response_model=SearchResponse)
 async def search_documents_by_image(
     image: UploadFile = File(...),
@@ -2333,6 +2339,15 @@ async def search_documents_by_image_hybrid(
     except Exception as e:
         logger.error(f"画像ハイブリッド検索エラー: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search/image-text-keyword", response_model=ImageTextKeywordSearchResponse)
+async def search_image_text_keyword_documents(
+    query: ImageTextKeywordSearchQuery,
+    request: Request,
+):
+    """画像ベクトル + テキストキーワード検索（新名称エンドポイント）"""
+    return await search_documents_by_image_hybrid(query, request)
 
 
 @app.get("/object/{bucket}/{object_name:path}")

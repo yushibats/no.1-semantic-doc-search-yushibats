@@ -23,7 +23,7 @@ import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showT
 // 検索画像の状態管理
 let selectedSearchImage = null;
 let currentSearchType = 'text'; // 'text' or 'image'
-let currentRetrievalMode = 'image'; // 'image' | 'text' | 'hybrid' | 'image-hybrid(keyword→image+keyword)'
+let currentRetrievalMode = 'image'; // 'image' | 'text' | 'image-text-vector' | 'image-text-keyword'
 
 function formatMatchPercent(score) {
   if (typeof score !== 'number' || Number.isNaN(score)) return '-';
@@ -76,13 +76,13 @@ function getModeMetricEntries(item, mode) {
   const scores = raw?.scores || item?.scores || {};
   const metrics = item?.metrics || {};
 
-  if (mode === 'image-hybrid') {
+  if (mode === 'image-text-keyword' || mode === 'image-hybrid') {
     return [
       {
         label: 'image',
         score: scores.image ?? metrics.image?.score ?? item.score,
         distance: raw.min_distance ?? metrics.image?.vector_distance ?? item.vector_distance,
-        extra: Array.isArray(raw.matched_images) && raw.matched_images.length ? `matched: ${raw.matched_images.length}件` : ''
+        extra: ''
       },
       {
         label: 'keyword',
@@ -99,13 +99,13 @@ function getModeMetricEntries(item, mode) {
     ];
   }
 
-  if (mode === 'hybrid') {
+  if (mode === 'image-text-vector' || mode === 'hybrid') {
     return [
       {
         label: 'image',
         score: scores.image ?? metrics.image?.score ?? (item.source_type === 'image' ? item.score : null),
         distance: raw.min_distance ?? metrics.image?.vector_distance ?? (item.source_type === 'image' ? item.vector_distance : null),
-        extra: Array.isArray(raw.matched_images) && raw.matched_images.length ? `matched: ${raw.matched_images.length}件` : ''
+        extra: ''
       },
       {
         label: 'text_vector',
@@ -140,10 +140,12 @@ function getModeMetricEntries(item, mode) {
 
 function getRetrievalModeLabel(mode) {
   switch (mode) {
+    case 'image-text-vector':
     case 'hybrid':
-      return 'image×text';
+      return 'image×text(vector)';
+    case 'image-text-keyword':
     case 'image-hybrid':
-      return 'image×keyword';
+      return 'image×text(keyword)';
     default:
       return mode || 'image';
   }
@@ -160,13 +162,13 @@ function getResultMatchTabs(item, mode) {
   const hasTextMatch = sourceTypes.includes('text') || metrics.text;
   const hasKeywordMatch = keywordMatches.length > 0 || typeof raw?.scores?.keyword === 'number' || typeof raw?.keyword_score === 'number';
 
-  if (mode === 'image-hybrid') {
+  if (mode === 'image-text-keyword' || mode === 'image-hybrid') {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
-    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
+    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'text(keyword)' });
     return tabs;
   }
 
-  if (mode === 'hybrid') {
+  if (mode === 'image-text-vector' || mode === 'hybrid') {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
     if (hasTextMatch) tabs.push({ key: 'text', label: 'text' });
     if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
@@ -836,7 +838,7 @@ export function switchSearchType(type) {
 
 /**
  * Retrieval mode を設定
- * @param {string} mode - 'image' | 'text' | 'hybrid' | 'image-hybrid'
+ * @param {string} mode - 'image' | 'text' | 'image-text-vector' | 'image-text-keyword'
  */
 export function setRetrievalMode(mode) {
   currentRetrievalMode = mode || 'image';
@@ -919,8 +921,8 @@ export async function performImageSearch() {
   try {
     const retrievalModeElement = document.getElementById('retrievalMode');
     const retrievalMode = retrievalModeElement?.value || currentRetrievalMode || 'image';
-    if (retrievalMode === 'image-hybrid') {
-      utilsShowToast('image-hybrid はキーワード入力から実行してください', 'warning');
+    if (retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') {
+      utilsShowToast('image×text(keyword) はキーワード入力から実行してください', 'warning');
       return;
     }
     setRetrievalMode(retrievalMode);
@@ -1049,16 +1051,16 @@ export async function performSearch() {
   setRetrievalMode(retrievalMode);
 
   try {
-    const loadingLabel = retrievalMode === 'hybrid'
-      ? 'ハイブリッド検索中...'
+    const loadingLabel = (retrievalMode === 'image-text-vector' || retrievalMode === 'hybrid')
+      ? 'image×text(vector) 検索中...'
       : (retrievalMode === 'text'
         ? 'テキスト検索中...'
-        : (retrievalMode === 'image-hybrid' ? '画像ハイブリッド検索中...' : '画像検索中...'));
+        : ((retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') ? 'image×text(keyword) 検索中...' : '画像検索中...'));
     utilsShowLoading(loadingLabel);
 
-    if (retrievalMode === 'image-hybrid' && currentSearchType === 'image') {
+    if ((retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') && currentSearchType === 'image') {
       utilsHideLoading();
-      utilsShowToast('image-hybrid はテキスト検索タブから実行してください', 'warning');
+      utilsShowToast('image×text(keyword) はテキスト検索タブから実行してください', 'warning');
       return;
     }
     
@@ -1070,10 +1072,10 @@ export async function performSearch() {
     let endpoint = '/ai/api/search';
     if (retrievalMode === 'text') {
       endpoint = '/ai/api/search/text';
-    } else if (retrievalMode === 'hybrid') {
-      endpoint = '/ai/api/search/hybrid';
-    } else if (retrievalMode === 'image-hybrid') {
-      endpoint = '/ai/api/search/image-hybrid';
+    } else if (retrievalMode === 'image-text-vector' || retrievalMode === 'hybrid') {
+      endpoint = '/ai/api/search/image-text-vector';
+    } else if (retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') {
+      endpoint = '/ai/api/search/image-text-keyword';
     }
 
     const data = await authApiCall(endpoint, {

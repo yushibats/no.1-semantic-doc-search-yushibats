@@ -63,13 +63,13 @@ class TextSearchQuery(BaseModel):
     filename_filter: Optional[str] = None
 
 
-class HybridSearchQuery(TextSearchQuery):
-    """ハイブリッド検索クエリ"""
+class ImageTextVectorSearchQuery(TextSearchQuery):
+    """画像ベクトル + テキストベクトル検索クエリ"""
     vector_weight: Optional[float] = 0.7
     keyword_weight: Optional[float] = 0.3
 
 
-class ImageHybridSearchResponse(BaseModel):
+class ImageTextKeywordSearchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     success: bool
@@ -83,7 +83,7 @@ class ImageHybridSearchResponse(BaseModel):
     weights: Optional[dict] = None
 
 
-class KeywordImageHybridSearchQuery(TextSearchQuery):
+class ImageTextKeywordSearchQuery(TextSearchQuery):
     """キーワード入力で画像ベクトル + TEXT_CHUNKSキーワード検索を行うクエリ"""
     image_weight: Optional[float] = 0.7
     keyword_weight: Optional[float] = 0.3
@@ -158,3 +158,9 @@ class TextIndexResponse(BaseModel):
     success_count: int
     failed_count: int
     results: List[dict]
+
+
+# backward compatible aliases
+HybridSearchQuery = ImageTextVectorSearchQuery
+ImageHybridSearchResponse = ImageTextKeywordSearchResponse
+KeywordImageHybridSearchQuery = ImageTextKeywordSearchQuery
