@@ -30,6 +30,114 @@ function formatMatchPercent(score) {
   return `${(score * 100).toFixed(1)}%`;
 }
 
+function formatDistance(distance) {
+  if (typeof distance !== 'number' || Number.isNaN(distance)) return '-';
+  return Number(distance).toFixed(4);
+}
+
+function formatMetricValue(value, formatter = (v) => v) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  return formatter(value);
+}
+
+function safeMetricLabel(label = '') {
+  return safeText(String(label || '').replace(/_/g, ' '));
+}
+
+function buildMetricRows(metricEntries = []) {
+  const rows = metricEntries
+    .filter((entry) => entry && (entry.score !== null && entry.score !== undefined || entry.distance !== null && entry.distance !== undefined || entry.extra))
+    .map((entry) => {
+      const extra = entry.extra ? `<span class="search-result-metric-extra">${safeText(entry.extra)}</span>` : '';
+      return `
+        <div class="search-result-metric-row">
+          <div class="search-result-metric-name">${safeMetricLabel(entry.label)}</div>
+          <div class="search-result-metric-values">
+            <span class="search-result-metric-pill">score: ${formatMetricValue(entry.score, formatMatchPercent)}</span>
+            <span class="search-result-metric-pill">距離: ${formatMetricValue(entry.distance, formatDistance)}</span>
+            ${extra}
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  if (!rows) return '';
+
+  return `
+    <div class="search-result-metric-panel">
+      ${rows}
+    </div>
+  `;
+}
+
+function getModeMetricEntries(item, mode) {
+  const raw = item?._raw || {};
+  const scores = raw?.scores || item?.scores || {};
+  const metrics = item?.metrics || {};
+
+  if (mode === 'image-hybrid') {
+    return [
+      {
+        label: 'image',
+        score: scores.image ?? metrics.image?.score ?? item.score,
+        distance: raw.min_distance ?? metrics.image?.vector_distance ?? item.vector_distance,
+        extra: Array.isArray(raw.matched_images) && raw.matched_images.length ? `matched: ${raw.matched_images.length}件` : ''
+      },
+      {
+        label: 'keyword',
+        score: scores.keyword ?? null,
+        distance: null,
+        extra: Array.isArray(item.keyword_matches) && item.keyword_matches.length ? `一致: ${item.keyword_matches.length}件` : ''
+      },
+      {
+        label: 'total',
+        score: raw.hybrid_score ?? item.score,
+        distance: null,
+        extra: raw.weights ? `weight image:${formatMetricValue(raw.weights.image_weight, v => `${(v * 100).toFixed(0)}%`)} / keyword:${formatMetricValue(raw.weights.keyword_weight, v => `${(v * 100).toFixed(0)}%`)}` : ''
+      }
+    ];
+  }
+
+  if (mode === 'hybrid') {
+    return [
+      {
+        label: 'image',
+        score: scores.image ?? metrics.image?.score ?? (item.source_type === 'image' ? item.score : null),
+        distance: raw.min_distance ?? metrics.image?.vector_distance ?? (item.source_type === 'image' ? item.vector_distance : null),
+        extra: Array.isArray(raw.matched_images) && raw.matched_images.length ? `matched: ${raw.matched_images.length}件` : ''
+      },
+      {
+        label: 'text_vector',
+        score: scores.text_vector ?? raw.vector_score ?? metrics.text?.score ?? (item.source_type === 'text' ? item.score : null),
+        distance: raw.vector_distance ?? metrics.text?.vector_distance ?? (item.source_type === 'text' ? item.vector_distance : null),
+        extra: item._merged_chunk_count ? `chunk: ${item._merged_chunk_count}` : ''
+      },
+      {
+        label: 'keyword',
+        score: scores.keyword ?? null,
+        distance: null,
+        extra: Array.isArray(item.keyword_matches) && item.keyword_matches.length ? `一致: ${item.keyword_matches.length}件` : ''
+      },
+      {
+        label: 'total',
+        score: raw.hybrid_score ?? scores.total ?? item.score,
+        distance: null,
+        extra: raw.weights ? `weight vector:${formatMetricValue(raw.weights.vector_weight, v => `${(v * 100).toFixed(0)}%`)} / keyword:${formatMetricValue(raw.weights.keyword_weight, v => `${(v * 100).toFixed(0)}%`)}` : ''
+      }
+    ];
+  }
+
+  return [
+    {
+      label: item.source_type || 'result',
+      score: item.score,
+      distance: item.vector_distance,
+      extra: ''
+    }
+  ];
+}
+
 function getRetrievalModeLabel(mode) {
   switch (mode) {
     case 'hybrid':
@@ -383,7 +491,8 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         preview_urls: previewUrls,
         preview_titles: previewTitles,
         preview_index: imgIndex,
-        _raw_ref: { fileIndex, imgIndex }
+        _raw_ref: { fileIndex, imgIndex },
+        _raw: fileResult
       });
     });
   });
@@ -463,6 +572,7 @@ function normalizeSearchResults(data, mode) {
 
 function renderResultCard(item, index, options = {}) {
   const compact = !!options.compact;
+  const mode = options.mode || currentRetrievalMode || 'image';
   const sourceTypes = Array.isArray(item.source_types) ? item.source_types : [item.source_type];
   const isImage = item.source_type === 'image';
   const isMixed = sourceTypes.includes('image') && sourceTypes.includes('text');
@@ -494,6 +604,7 @@ function renderResultCard(item, index, options = {}) {
         <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
         ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
       `;
+  const metricDetailPanel = buildMetricRows(getModeMetricEntries(item, mode));
   const keywordHitBadge = keywordMatches.length > 0
     ? `<span class="badge search-result-inline-stat-badge" title="キーワード一致あり"><i class="fas fa-key" style="margin-right: 4px;"></i></span>`
     : '';
@@ -562,6 +673,8 @@ function renderResultCard(item, index, options = {}) {
               <i class="fas fa-key"></i> キーワード一致あり（${safeText(keywordMatches.length)}件）
             </div>
           ` : ''}
+
+          ${metricDetailPanel}
         </div>
       </div>
   `;
@@ -579,6 +692,10 @@ function renderDocumentGroupCard(group, groupIndex) {
   const sourceTypeLabel = hasText && hasImage
     ? 'text + image'
     : (hasText ? 'text' : 'image');
+
+  const mode = window._searchResultsData?.mode || currentRetrievalMode || 'image';
+  const topEntry = group.entries?.[0]?.item;
+  const groupMetricPanel = topEntry ? buildMetricRows(getModeMetricEntries(topEntry, mode)) : '';
 
   return `
     <div class="card search-doc-group-card">
@@ -600,9 +717,16 @@ function renderDocumentGroupCard(group, groupIndex) {
       </div>
 
       <div class="search-doc-group-body">
+        ${groupMetricPanel ? `
+          <div class="search-doc-group-section">
+            <div class="search-doc-group-section-title"><i class="fas fa-chart-line"></i> 検索詳細</div>
+            ${groupMetricPanel}
+          </div>
+        ` : ''}
+
         <div class="search-doc-group-body-title"><i class="far fa-images"></i> マッチした項目（距離が小さい順・text/image混合）</div>
         <div class="search-doc-group-entries">
-          ${group.entries.map(({ item, index }) => renderResultCard(item, index, { compact: true })).join('')}
+          ${group.entries.map(({ item, index }) => renderResultCard(item, index, { compact: true, mode })).join('')}
         </div>
       </div>
     </div>
@@ -928,7 +1052,7 @@ export async function performSearch() {
     });
     
     utilsHideLoading();
-    displaySearchResults(data, { mode: retrievalMode === 'image-hybrid' ? 'hybrid' : retrievalMode });
+    displaySearchResults(data, { mode: retrievalMode });
     
     // 検索完了メッセージを表示
     utilsShowToast('検索が完了しました', 'success');

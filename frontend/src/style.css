@@ -516,12 +516,19 @@ button .fas,button .far,a .fas,a .far{margin-right:4px}
 .search-result-card-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .search-text-popup-btn{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600}
 .search-text-thumb-caption{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:8px}
+.search-result-metric-panel{margin-top:10px;padding:10px 12px;border:1px solid #dbe3ef;border-radius:8px;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);display:flex;flex-direction:column;gap:8px}
+.search-result-metric-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.search-result-metric-name{font-size:12px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:.04em}
+.search-result-metric-values{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.search-result-metric-pill{display:inline-flex;align-items:center;padding:4px 8px;border-radius:9999px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:11px;font-weight:600;line-height:1.2}
+.search-result-metric-extra{display:inline-flex;align-items:center;padding:4px 8px;border-radius:9999px;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;font-size:11px;font-weight:500;line-height:1.2}
 .search-result-text-modal-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;color:#334155;font-size:14px;max-height:60vh;overflow:auto;padding:4px 2px}
 
 @media (max-width: 900px){
   .search-doc-group-entries{grid-template-columns:1fr}
   .search-result-entry-header{flex-direction:column}
   .search-result-card-actions{justify-content:flex-start}
+  .search-result-metric-row{flex-direction:column;align-items:flex-start}
 }
 
 @media (max-width: 768px){
