@@ -514,6 +514,13 @@ button .fas,button .far,a .fas,a .far{margin-right:4px}
 .search-result-entry-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px}
 .search-result-entry-badges{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .search-result-card-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.search-result-match-tabs{display:inline-flex;align-items:center;gap:0;border:1px solid #93c5fd;border-radius:10px;overflow:hidden;background:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.65)}
+.search-result-match-tab{display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;font-size:12px;font-weight:700;line-height:1;color:#1d4ed8;background:#eff6ff;border-right:1px solid #bfdbfe;text-transform:lowercase}
+.search-result-match-tab:last-child{border-right:none}
+.search-result-match-tab.is-single{border:1px solid #93c5fd;border-radius:10px;background:#eff6ff;color:#1d4ed8;box-shadow:inset 0 1px 0 rgba(255,255,255,.65)}
+.search-result-match-tab-text{background:#eef2ff;color:#4338ca;border-right-color:#c7d2fe}
+.search-result-match-tab-keyword{background:#effdf4;color:#15803d;border-right-color:#bbf7d0}
+.search-result-match-tab-image{background:#eff6ff;color:#1d4ed8}
 .search-text-popup-btn{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600}
 .search-text-thumb-caption{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:8px}
 .search-result-metric-panel{margin-top:10px;padding:10px 12px;border:1px solid #dbe3ef;border-radius:8px;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);display:flex;flex-direction:column;gap:8px}

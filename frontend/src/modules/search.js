@@ -149,6 +149,50 @@ function getRetrievalModeLabel(mode) {
   }
 }
 
+function getResultMatchTabs(item, mode) {
+  const sourceTypes = Array.isArray(item?.source_types) ? item.source_types : [item?.source_type].filter(Boolean);
+  const raw = item?._raw || {};
+  const metrics = item?.metrics || {};
+  const keywordMatches = Array.isArray(item?.keyword_matches) ? item.keyword_matches : [];
+  const tabs = [];
+
+  const hasImageMatch = sourceTypes.includes('image') || metrics.image || Array.isArray(raw.matched_images);
+  const hasTextMatch = sourceTypes.includes('text') || metrics.text;
+  const hasKeywordMatch = keywordMatches.length > 0 || typeof raw?.scores?.keyword === 'number' || typeof raw?.keyword_score === 'number';
+
+  if (mode === 'image-hybrid') {
+    if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
+    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
+    return tabs;
+  }
+
+  if (mode === 'hybrid') {
+    if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
+    if (hasTextMatch) tabs.push({ key: 'text', label: 'text' });
+    if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
+    return tabs;
+  }
+
+  if (hasImageMatch) return [{ key: 'image', label: 'image' }];
+  if (hasTextMatch) return [{ key: 'text', label: 'text' }];
+  return [{ key: 'result', label: item?.source_type || 'result' }];
+}
+
+function buildResultMatchTabs(item, mode) {
+  const tabs = getResultMatchTabs(item, mode);
+  if (tabs.length <= 1) {
+    return tabs.length === 1
+      ? `<span class="search-result-match-tab is-single">${safeText(tabs[0].label)}</span>`
+      : '';
+  }
+
+  return `
+    <div class="search-result-match-tabs" aria-label="一致した検索種別">
+      ${tabs.map((tab) => `<span class="search-result-match-tab search-result-match-tab-${safeText(tab.key)}">${safeText(tab.label)}</span>`).join('')}
+    </div>
+  `;
+}
+
 function buildKeywordMatchExcerpt(result) {
   const matches = Array.isArray(result?.keyword_matches) ? result.keyword_matches : [];
   if (!matches.length) return '';
@@ -591,19 +635,7 @@ function renderResultCard(item, index, options = {}) {
   const previewThumbUrl = (isImage || isMixed) ? item.thumbnail_url : primaryRelatedImageUrl;
   const pageLabel = item.page_no ? `ページ ${safeText(item.page_no)}` : '';
   const metrics = item.metrics || {};
-  const metricBadges = isMixed
-    ? ['text', 'image'].filter(type => metrics[type]).map((type) => {
-        const metric = metrics[type] || {};
-        const typeLabel = type === 'text' ? 'text' : 'image';
-        return `
-          <span class="badge search-result-inline-stat-badge">${typeLabel} マッチ度: ${formatMatchPercent(metric.score)}</span>
-          ${metric.vector_distance !== null && metric.vector_distance !== undefined ? `<span class="badge search-result-inline-stat-badge">${typeLabel} 距離: ${Number(metric.vector_distance).toFixed(4)}</span>` : ''}
-        `;
-      }).join('')
-    : `
-        <span class="badge search-result-inline-stat-badge">マッチ度: ${formatMatchPercent(item.score)}</span>
-        ${item.vector_distance !== null ? `<span class="badge search-result-inline-stat-badge">距離: ${item.vector_distance.toFixed(4)}</span>` : ''}
-      `;
+  const matchTabs = buildResultMatchTabs(item, mode);
   const metricDetailPanel = buildMetricRows(getModeMetricEntries(item, mode));
   const keywordHitBadge = keywordMatches.length > 0
     ? `<span class="badge search-result-inline-stat-badge" title="キーワード一致あり"><i class="fas fa-key" style="margin-right: 4px;"></i></span>`
@@ -637,9 +669,8 @@ function renderResultCard(item, index, options = {}) {
         <div class="search-result-content-column">
           <div class="search-result-entry-header">
             <div class="search-result-entry-badges">
-            <span class="badge" style="${badgeClass} font-weight: 700;">${safeText(isMixed ? 'text + image' : (item.source_type || '-'))}</span>
+            ${matchTabs}
             ${keywordHitBadge}
-            ${metricBadges}
             ${pageLabel ? `<span class="badge search-result-inline-stat-badge">${pageLabel}</span>` : ''}
             </div>
             <div class="search-result-card-actions">
