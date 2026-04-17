@@ -2373,11 +2373,45 @@ async def search_documents_by_image_hybrid(
                 )
             )
 
+        query_token_count = len(keyword_terms)
+        keyword_rows_by_object: Dict[str, List[dict]] = defaultdict(list)
+        for row in text_rows:
+            object_name = row.get("object_name")
+            if not object_name:
+                continue
+
+            chunk_text = row.get("chunk_text", "") or ""
+            keyword_hit_count = sum(1 for term in keyword_terms if term.lower() in chunk_text.lower())
+            keyword_score = (keyword_hit_count / query_token_count) if query_token_count > 0 else 0.0
+
+            keyword_match = {
+                "chunk_id": row.get("chunk_id"),
+                "page_number": row.get("page_number"),
+                "chunk_index": row.get("chunk_index"),
+                "chunk_text": chunk_text,
+                "char_count": row.get("char_count"),
+                "keyword_score": keyword_score,
+            }
+            keyword_rows_by_object[object_name].append(keyword_match)
+
+        for file_data in files_dict.values():
+            object_name = file_data.get("object_name")
+            keyword_matches = keyword_rows_by_object.get(object_name, [])
+            if not keyword_matches:
+                continue
+
+            file_data["keyword_matches"] = keyword_matches
+            file_data["scores"]["keyword"] = max(
+                (match.get("keyword_score", 0.0) for match in keyword_matches),
+                default=0.0,
+            )
+
         typed_results = []
         for file_data in files_dict.values():
             sorted_images = sorted(file_data["images"], key=lambda x: x.vector_distance)
             hybrid_score = (
                 normalized_vector_weight * file_data["scores"].get("image", 0.0)
+                + normalized_keyword_weight * file_data["scores"].get("keyword", 0.0)
             )
             matched_images = sorted_images
 
@@ -2397,7 +2431,9 @@ async def search_documents_by_image_hybrid(
                     hybrid_score=hybrid_score,
                     scores={
                         "image": file_data["scores"].get("image", 0.0),
+                        "keyword": file_data["scores"].get("keyword", 0.0),
                     },
+                    keyword_matches=file_data["keyword_matches"],
                 )
             )
 
@@ -2415,6 +2451,7 @@ async def search_documents_by_image_hybrid(
             processing_time=processing_time,
             weights={
                 "image_weight": normalized_vector_weight,
+                "keyword_weight": normalized_keyword_weight,
             },
         )
 
