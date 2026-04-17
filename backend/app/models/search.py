@@ -69,6 +69,12 @@ class ImageTextVectorSearchQuery(TextSearchQuery):
     keyword_weight: Optional[float] = 0.3
 
 
+class ImageTextPureVectorSearchQuery(TextSearchQuery):
+    """画像ベクトル + テキストベクトルのみの検索クエリ"""
+    image_weight: Optional[float] = 0.5
+    vector_weight: Optional[float] = 0.5
+
+
 class ImageTextKeywordSearchQuery(TextSearchQuery):
     """キーワード入力で画像ベクトル + TEXT_CHUNKSキーワード検索を行うクエリ"""
     image_weight: Optional[float] = 0.7

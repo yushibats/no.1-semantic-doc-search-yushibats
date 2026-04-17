@@ -59,6 +59,7 @@ from app.models.search import (
     ImageTextVectorSearchQuery,
     HybridSearchQuery,
     TextSearchResponse,
+    ImageTextPureVectorSearchQuery,
     TextChunkSearchResult,
     HybridSearchResponse,
     HybridImageSearchResult,
@@ -1919,8 +1920,153 @@ async def search_hybrid_documents(query: HybridSearchQuery, request: Request):
 
 @app.post("/search/image-text-vector", response_model=HybridSearchResponse)
 async def search_image_text_vector_documents(query: ImageTextVectorSearchQuery, request: Request):
-    """画像ベクトル + テキストベクトル検索（新名称エンドポイント）"""
+    """画像ベクトル + テキストベクトル + キーワードのハイブリッド検索（新名称エンドポイント）"""
     return await search_hybrid_documents(query, request)
+
+
+@app.post("/search/image-text", response_model=HybridSearchResponse)
+async def search_image_text_documents(query: ImageTextPureVectorSearchQuery, request: Request):
+    """画像ベクトル + テキストベクトルのみの検索"""
+    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
+        raise HTTPException(status_code=403, detail="Image-text search is disabled")
+
+    start_time = time.time()
+
+    image_weight = max(0.0, min(1.0, float(query.image_weight if query.image_weight is not None else 0.5)))
+    vector_weight = max(0.0, min(1.0, float(query.vector_weight if query.vector_weight is not None else 0.5)))
+    weight_sum = image_weight + vector_weight
+    if weight_sum <= 0:
+        image_weight = 0.5
+        vector_weight = 0.5
+        weight_sum = 1.0
+
+    normalized_image_weight = image_weight / weight_sum
+    normalized_vector_weight = vector_weight / weight_sum
+
+    text_result = await asyncio.to_thread(
+        text_rag_processor.search_vector_only,
+        query.query,
+        query.top_k or 10,
+        query.min_score if query.min_score is not None else 0.7,
+        query.filename_filter,
+    )
+
+    image_query_embedding = await asyncio.to_thread(image_vectorizer.generate_text_embedding, query.query)
+    image_rows = []
+    if image_query_embedding is not None:
+        image_rows = await image_vectorizer.search_similar_images_async(
+            query_embedding=image_query_embedding,
+            limit=max((query.top_k or 10) * 3, query.top_k or 10),
+            threshold=query.min_score if query.min_score is not None else 0.7,
+            filename_filter=query.filename_filter,
+        ) or []
+
+    from collections import defaultdict
+    from urllib.parse import quote
+
+    base_url = build_public_api_base_url(request)
+    temp_token = generate_temp_token(source="image_text_search")
+    auth_query_param = f"?t={temp_token}"
+
+    def build_absolute_url(bucket: str, object_name: str) -> str:
+        encoded_name = quote(object_name, safe='/')
+        return f"{base_url}/object/{bucket}/{encoded_name}{auth_query_param}"
+
+    typed_text_results = []
+    for r in text_result.get("results", []):
+        row = dict(r)
+        row["source_type"] = "text"
+        row["hybrid_score"] = normalized_vector_weight * float(row.get("scores", {}).get("text_vector", 0.0))
+        if row.get("bucket") and row.get("object_name"):
+            row["file_url"] = build_absolute_url(row["bucket"], row["object_name"])
+        typed_text_results.append(TextChunkSearchResult(**row))
+
+    files_dict = defaultdict(lambda: {
+        'file_id': None,
+        'bucket': None,
+        'object_name': None,
+        'original_filename': None,
+        'file_size': None,
+        'content_type': None,
+        'uploaded_at': None,
+        'min_distance': float('inf'),
+        'images': [],
+    })
+
+    for row in image_rows:
+        file_id = row['file_id']
+        if files_dict[file_id]['file_id'] is None:
+            files_dict[file_id]['file_id'] = row['file_id']
+            files_dict[file_id]['bucket'] = row['file_bucket']
+            files_dict[file_id]['object_name'] = row['file_object_name']
+            files_dict[file_id]['original_filename'] = row.get('original_filename')
+            files_dict[file_id]['file_size'] = row.get('file_size')
+            files_dict[file_id]['content_type'] = row.get('file_content_type')
+            files_dict[file_id]['uploaded_at'] = row.get('uploaded_at')
+
+        distance = float(row['vector_distance'])
+        if distance < files_dict[file_id]['min_distance']:
+            files_dict[file_id]['min_distance'] = distance
+
+        files_dict[file_id]['images'].append(
+            ImageSearchResult(
+                embed_id=row['embed_id'],
+                bucket=row['bucket'],
+                object_name=row['object_name'],
+                page_number=row['page_number'],
+                vector_distance=distance,
+                content_type=row.get('content_type'),
+                file_size=row.get('img_file_size'),
+                url=build_absolute_url(row['bucket'], row['object_name']),
+            )
+        )
+
+    typed_image_results = []
+    for file_data in files_dict.values():
+        sorted_images = sorted(file_data['images'], key=lambda x: x.vector_distance)
+        image_score = max(0.0, min(1.0, 1.0 - file_data['min_distance']))
+        typed_image_results.append(
+            HybridImageSearchResult(
+                source_type="image",
+                file_id=file_data['file_id'],
+                bucket=file_data['bucket'],
+                object_name=file_data['object_name'],
+                original_filename=file_data['original_filename'],
+                file_size=file_data['file_size'],
+                content_type=file_data['content_type'],
+                uploaded_at=file_data['uploaded_at'],
+                min_distance=file_data['min_distance'],
+                matched_images=sorted_images,
+                url=build_absolute_url(file_data['bucket'], file_data['object_name']),
+                hybrid_score=normalized_image_weight * image_score,
+                scores={
+                    "image": image_score,
+                    "text_vector": None,
+                    "keyword": 0.0,
+                },
+            )
+        )
+
+    combined_results = sorted(
+        [*typed_text_results, *typed_image_results],
+        key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0,
+        reverse=True,
+    )[: query.top_k or 10]
+
+    processing_time = time.time() - start_time
+    return HybridSearchResponse(
+        success=text_result.get("success", False) or bool(typed_image_results),
+        query=text_result.get("query", query.query),
+        results=combined_results,
+        total=len(combined_results),
+        message=text_result.get("message"),
+        processing_time=processing_time,
+        weights={
+            "image_weight": normalized_image_weight,
+            "vector_weight": normalized_vector_weight,
+            "keyword_weight": 0.0,
+        },
+    )
 
 
 @app.post("/search/image", response_model=SearchResponse)

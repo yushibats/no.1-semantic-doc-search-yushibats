@@ -411,3 +411,60 @@ class TextRAGProcessor:
             "results": results,
             "total": len(results),
         }
+
+    def search_vector_only(
+        self,
+        query: str,
+        top_k: int = 10,
+        min_score: float = 0.7,
+        filename_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        query_embedding = self.image_vectorizer.generate_text_embedding(query)
+        if query_embedding is None:
+            return {"success": False, "query": query, "results": [], "message": "query embedding生成失敗"}
+
+        vector_rows = self.database_service.search_text_chunks_by_vector(
+            query_embedding=query_embedding,
+            limit=max(top_k * 3, top_k),
+            threshold=min_score,
+            filename_filter=filename_filter,
+        ) or []
+
+        results: List[Dict[str, Any]] = []
+        for row in vector_rows:
+            vector_distance = float(row.get("vector_distance", 1.0))
+            vector_score = max(0.0, min(1.0, 1.0 - vector_distance))
+            results.append(
+                {
+                    "chunk_id": int(row["chunk_id"]),
+                    "bucket": row.get("bucket"),
+                    "object_name": row.get("object_name"),
+                    "original_filename": row.get("original_filename"),
+                    "chunk_index": row.get("chunk_index"),
+                    "page_number": row.get("page_number"),
+                    "chunk_text": row.get("chunk_text"),
+                    "char_count": row.get("char_count"),
+                    "vector_distance": vector_distance,
+                    "source_type": "text",
+                    "scores": {
+                        "text_vector": vector_score,
+                        "keyword": 0.0,
+                        "image": None,
+                    },
+                    "hybrid_score": vector_score,
+                }
+            )
+
+        results.sort(key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
+        results = results[:top_k]
+
+        return {
+            "success": True,
+            "query": query,
+            "weights": {
+                "vector_weight": 1.0,
+                "keyword_weight": 0.0,
+            },
+            "results": results,
+            "total": len(results),
+        }
