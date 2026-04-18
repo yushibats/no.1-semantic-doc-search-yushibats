@@ -452,6 +452,13 @@ export async function fetchWithAuth(endpoint, options = {}) {
   const url = apiBase ? `${apiBase}${endpoint}` : endpoint;
   const headers = { ...(options.headers || {}) };
 
+  const isSearchRequest = /\/search(?:\/|$)/.test(endpoint || '');
+
+  if (isSearchRequest) {
+    if (!headers['Cache-Control']) headers['Cache-Control'] = 'no-store, no-cache, max-age=0';
+    if (!headers.Pragma) headers.Pragma = 'no-cache';
+  }
+
   const loginToken = localStorage.getItem('loginToken');
   if (loginToken) {
     headers['Authorization'] = `Bearer ${loginToken}`;
@@ -464,6 +471,7 @@ export async function fetchWithAuth(endpoint, options = {}) {
   try {
     const response = await fetch(url, {
       ...fetchOptions,
+      ...(isSearchRequest ? { cache: 'no-store' } : {}),
       headers,
       ...(controller ? { signal: controller.signal } : {})
     });

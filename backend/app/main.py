@@ -136,6 +136,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
+@app.middleware("http")
+async def add_no_store_header_for_search(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/search"):
+        response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # CORS設定
 app.add_middleware(
     CORSMiddleware,

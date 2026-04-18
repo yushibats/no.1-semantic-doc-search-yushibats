@@ -917,8 +917,9 @@ export async function performImageSearch() {
   try {
     const retrievalModeElement = document.getElementById('retrievalMode');
     const retrievalMode = retrievalModeElement?.value || currentRetrievalMode || 'image';
-    if (retrievalMode === 'image-text-keyword' || retrievalMode === 'image-hybrid') {
-      utilsShowToast('image×keyword はキーワード入力から実行してください', 'warning');
+    if (retrievalMode !== 'image') {
+      const modeLabel = getRetrievalModeLabel(retrievalMode);
+      utilsShowToast(`${modeLabel} はテキスト検索タブから実行してください`, 'warning');
       return;
     }
     setRetrievalMode(retrievalMode);
@@ -939,7 +940,7 @@ export async function performImageSearch() {
     });
     
     utilsHideLoading();
-    displaySearchResultsWithMode(data, { mode: 'image' });
+    displaySearchResultsWithMode(data, { mode: retrievalMode });
     
     // 検索完了メッセージを表示
     utilsShowToast('画像検索が完了しました', 'success');
