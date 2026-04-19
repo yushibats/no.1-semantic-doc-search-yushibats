@@ -622,10 +622,11 @@ function showModal({
       
       .modern-modal-container {
         position: relative;
-        background: white;
+        background: #fff;
         border-radius: 16px;
-        max-width: 420px;
-        width: 100%;
+        max-width: min(1260px, 92vw);
+        width: min(1260px, 92vw);
+        margin: 0 auto;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
         animation: modernModalSlideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         overflow: hidden;
