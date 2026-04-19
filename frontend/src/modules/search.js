@@ -156,18 +156,22 @@ function getResultMatchTabs(item, mode) {
   const metrics = item?.metrics || {};
   const keywordMatches = Array.isArray(item?.keyword_matches) ? item.keyword_matches : [];
   const tabs = [];
+  const isKeywordMode = mode === 'image-text-keyword' || mode === 'image-hybrid';
+  const isTextVectorMode = mode === 'image-text' || mode === 'image-text-vector' || mode === 'hybrid';
 
   const hasImageMatch = sourceTypes.includes('image') || metrics.image || Array.isArray(raw.matched_images);
   const hasTextMatch = sourceTypes.includes('text') || metrics.text;
-  const hasKeywordMatch = keywordMatches.length > 0 || typeof raw?.scores?.keyword === 'number' || typeof raw?.keyword_score === 'number';
+  const hasKeywordMatch = isKeywordMode && (
+    keywordMatches.length > 0 || typeof raw?.scores?.keyword === 'number' || typeof raw?.keyword_score === 'number'
+  );
 
-  if (mode === 'image-text-keyword' || mode === 'image-hybrid') {
+  if (isKeywordMode) {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
     if (hasKeywordMatch) tabs.push({ key: 'keyword', label: 'keyword' });
     return tabs;
   }
 
-  if (mode === 'image-text' || mode === 'image-text-vector' || mode === 'hybrid') {
+  if (isTextVectorMode) {
     if (hasImageMatch) tabs.push({ key: 'image', label: 'image' });
     if (hasTextMatch) tabs.push({ key: 'text', label: 'text' });
     return tabs;
@@ -587,7 +591,7 @@ function normalizeSearchResults(data, mode) {
       page_number: result.page_number
     }) : { urls: [], titles: [] };
 
-    normalized.push({
+    const normalizedItem = {
       source_type: sourceType,
       score,
       vector_distance: typeof result.vector_distance === 'number' ? result.vector_distance : null,
@@ -608,7 +612,30 @@ function normalizeSearchResults(data, mode) {
       keyword_matches: Array.isArray(result.keyword_matches) ? result.keyword_matches : [],
       preview_index: 0,
       _raw: result
-    });
+    };
+
+    if (mode !== 'image-text-keyword' && mode !== 'image-hybrid') {
+      normalizedItem.keyword_matches = [];
+      if (normalizedItem._raw && typeof normalizedItem._raw === 'object') {
+        if (normalizedItem._raw.scores && typeof normalizedItem._raw.scores === 'object') {
+          normalizedItem._raw = {
+            ...normalizedItem._raw,
+            scores: {
+              ...normalizedItem._raw.scores,
+              keyword: undefined,
+            },
+            keyword_score: undefined,
+          };
+        } else {
+          normalizedItem._raw = {
+            ...normalizedItem._raw,
+            keyword_score: undefined,
+          };
+        }
+      }
+    }
+
+    normalized.push(normalizedItem);
   });
 
   return normalized;
@@ -1115,6 +1142,13 @@ export function displaySearchResultsWithMode(data, options = {}) {
   const listDiv = document.getElementById('searchResultsList');
 
   const mode = options.mode || currentRetrievalMode || 'image';
+
+  window._searchResultsData = {
+    raw: null,
+    mode,
+    results: []
+  };
+
   const normalizedResults = mergeMixedResultsByDocumentPage(mergeTextResultsByPage(normalizeSearchResults(data, mode)));
   const groupedResults = groupResultsByDocument(normalizedResults);
 
