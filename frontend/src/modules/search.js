@@ -245,7 +245,7 @@ function showResultTextModal(title, text) {
       content: `
         <div class="search-result-text-modal-body">${safeText(text || '（テキストなし）')}</div>
       `,
-      size: 'lg'
+      size: 'xl'
     });
     return;
   }
@@ -513,6 +513,19 @@ function normalizeImageFileResultsToItems(fileResults = []) {
     const originalFilename = fileResult.original_filename || (fileResult.object_name || '').split('/').pop() || '-';
     const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
 
+    const previewUrls = matchedImages.map((img) => {
+      const imageObjectName = img.object_name || fileResult.object_name || '-';
+      const imageBucket = img.bucket || fileResult.bucket || '';
+      return img.url
+        ? getAuthenticatedImageUrl(img.url)
+        : getAuthenticatedImageUrl(imageBucket, imageObjectName);
+    }).filter(Boolean);
+
+    const previewTitles = matchedImages.map((img) => {
+      const vectorDistance = typeof img.vector_distance === 'number' ? img.vector_distance : null;
+      return `ページ ${img.page_number ?? '-'}${vectorDistance !== null ? ` - マッチ度: ${((1 - vectorDistance) * 100).toFixed(1)}%` : ''}${vectorDistance !== null ? ` | 距離: ${vectorDistance.toFixed(4)}` : ''}`;
+    });
+
     matchedImages.forEach((img, imgIndex) => {
       const vectorDistance = typeof img.vector_distance === 'number' ? img.vector_distance : null;
       const imageObjectName = img.object_name || fileResult.object_name || '-';
@@ -533,9 +546,9 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         content_excerpt: '',
         thumbnail_url: previewUrl,
         download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
-        preview_urls: previewUrl ? [previewUrl] : [],
-        preview_titles: previewTitle ? [previewTitle] : [],
-        preview_index: 0,
+        preview_urls: previewUrls,
+        preview_titles: previewTitles,
+        preview_index: imgIndex,
         _raw_ref: { fileIndex, imgIndex },
         _raw: fileResult
       });
