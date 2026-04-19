@@ -136,13 +136,13 @@ export function showImageModal(imageUrl, filename = '', images = null, currentIn
   
   // ナビゲーションボタンを含むHTML
   modal.innerHTML = `
-    <div style="position: relative; max-width: 90vw; max-height: 90vh; display: flex; align-items: center; justify-content: center;">
+    <div style="position: relative; width: min(96vw, 1600px); max-width: 96vw; max-height: 90vh; display: flex; align-items: center; justify-content: center; padding: 0 72px; box-sizing: border-box;">
       ${hasNavigation ? `
         <button 
           id="imageModalPrevBtn"
           style="
             position: absolute;
-            left: -60px;
+             left: 12px;
             top: 50%;
             transform: translateY(-50%);
             background: rgba(255, 255, 255, 0.9);
@@ -209,7 +209,7 @@ export function showImageModal(imageUrl, filename = '', images = null, currentIn
           alt="${filename}" 
           class="image-modal-img" 
           onclick="event.stopPropagation()"
-          style="max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);"
+          style="max-width: 100%; max-height: 90vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);"
         >
       </div>
       
@@ -218,7 +218,7 @@ export function showImageModal(imageUrl, filename = '', images = null, currentIn
           id="imageModalNextBtn"
           style="
             position: absolute;
-            right: -60px;
+             right: 12px;
             top: 50%;
             transform: translateY(-50%);
             background: rgba(255, 255, 255, 0.9);

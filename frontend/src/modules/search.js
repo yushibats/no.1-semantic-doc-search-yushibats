@@ -512,18 +512,15 @@ function normalizeImageFileResultsToItems(fileResults = []) {
   fileResults.forEach((fileResult, fileIndex) => {
     const originalFilename = fileResult.original_filename || (fileResult.object_name || '').split('/').pop() || '-';
     const matchedImages = Array.isArray(fileResult.matched_images) ? fileResult.matched_images : [];
-    const previewUrls = matchedImages.map(img => (
-      img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name)
-    ));
-    const previewTitles = matchedImages.map(img => {
-      const score = typeof img.vector_distance === 'number' ? (1 - img.vector_distance) * 100 : null;
-      return `ページ ${img.page_number ?? '-'}${score !== null ? ` - マッチ度: ${score.toFixed(1)}%` : ''}${typeof img.vector_distance === 'number' ? ` | 距離: ${img.vector_distance.toFixed(4)}` : ''}`;
-    });
 
     matchedImages.forEach((img, imgIndex) => {
       const vectorDistance = typeof img.vector_distance === 'number' ? img.vector_distance : null;
       const imageObjectName = img.object_name || fileResult.object_name || '-';
       const imageBucket = img.bucket || fileResult.bucket || '';
+      const previewUrl = img.url
+        ? getAuthenticatedImageUrl(img.url)
+        : getAuthenticatedImageUrl(imageBucket, imageObjectName);
+      const previewTitle = `ページ ${img.page_number ?? '-'}${vectorDistance !== null ? ` - マッチ度: ${((1 - vectorDistance) * 100).toFixed(1)}%` : ''}${vectorDistance !== null ? ` | 距離: ${vectorDistance.toFixed(4)}` : ''}`;
       items.push({
         source_type: 'image',
         score: vectorDistance !== null ? (1 - vectorDistance) : null,
@@ -534,11 +531,11 @@ function normalizeImageFileResultsToItems(fileResults = []) {
         object_name: imageObjectName,
         page_no: img.page_number ?? null,
         content_excerpt: '',
-        thumbnail_url: img.url ? getAuthenticatedImageUrl(img.url) : getAuthenticatedImageUrl(img.bucket, img.object_name),
+        thumbnail_url: previewUrl,
         download_url: fileResult.url ? getAuthenticatedImageUrl(fileResult.url) : getAuthenticatedImageUrl(fileResult.bucket, fileResult.object_name),
-        preview_urls: previewUrls,
-        preview_titles: previewTitles,
-        preview_index: imgIndex,
+        preview_urls: previewUrl ? [previewUrl] : [],
+        preview_titles: previewTitle ? [previewTitle] : [],
+        preview_index: 0,
         _raw_ref: { fileIndex, imgIndex },
         _raw: fileResult
       });
