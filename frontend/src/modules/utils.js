@@ -123,12 +123,17 @@ export function showImageModal(imageUrl, filename = '', images = null, currentIn
     _imageModalEscHandler = null;
   }
   
+  const normalizedImages = Array.isArray(images)
+    ? images.filter((src) => typeof src === 'string' && src)
+    : [];
+  const normalizedTitles = Array.isArray(titles) ? titles : [];
+
   // 画像リストとインデックスを保存
-  _imageModalImages = images || [imageUrl];
+  _imageModalImages = normalizedImages.length ? normalizedImages : [imageUrl];
   _imageModalCurrentIndex = currentIndex;
-  _imageModalTitles = titles || [filename];
+  _imageModalTitles = normalizedTitles.length ? normalizedTitles : [filename];
   
-  const hasNavigation = images && images.length > 1;
+  const hasNavigation = _imageModalImages.length > 1;
   
   const modal = document.createElement('div');
   modal.id = 'imageModalOverlay';
@@ -183,7 +188,7 @@ export function showImageModal(imageUrl, filename = '', images = null, currentIn
             backdrop-filter: blur(4px);
           ">
             <span id="imageModalFilename">${filename}</span>
-            <span style="margin-left: 12px; opacity: 0.8;">${currentIndex + 1} / ${images.length}</span>
+            <span style="margin-left: 12px; opacity: 0.8;">${currentIndex + 1} / ${_imageModalImages.length}</span>
           </div>
         ` : `
           ${filename ? `
