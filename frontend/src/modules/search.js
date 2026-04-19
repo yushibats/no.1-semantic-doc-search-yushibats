@@ -462,21 +462,40 @@ function buildRelatedImagePreview(itemLike) {
   }
 
   const pageNo = Math.max(1, parseInt(inferTextRelatedPageNo(itemLike), 10) || 1);
-  const page3 = String(pageNo).padStart(3, '0');
-  const page6 = String(pageNo).padStart(6, '0');
   const basePath = objectName.replace(/\.[^.\/]+$/, '');
 
-  const objectNameCandidates = [
-    `${basePath}/page_${page3}.png`,
-    `${basePath}/page_${page6}.png`
-  ];
+  const pageCandidates = [];
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const candidatePage = pageNo + offset;
+    if (candidatePage < 1) continue;
+    pageCandidates.push(candidatePage);
+  }
 
-  const urls = objectNameCandidates.map(name => (
-    bucket ? getAuthenticatedImageUrl(bucket, name) : ''
+  const objectNameCandidates = pageCandidates.flatMap((candidatePage) => {
+    const page3 = String(candidatePage).padStart(3, '0');
+    const page6 = String(candidatePage).padStart(6, '0');
+    return [
+      {
+        page: candidatePage,
+        objectName: `${basePath}/page_${page3}.png`
+      },
+      {
+        page: candidatePage,
+        objectName: `${basePath}/page_${page6}.png`
+      }
+    ];
+  });
+
+  const uniqueCandidates = objectNameCandidates.filter((candidate, index, array) => (
+    array.findIndex((item) => item.objectName === candidate.objectName) === index
+  ));
+
+  const urls = uniqueCandidates.map((candidate) => (
+    bucket ? getAuthenticatedImageUrl(bucket, candidate.objectName) : ''
   )).filter(Boolean);
-  const titles = objectNameCandidates.map(() => (
-    `${itemLike.file_name || '関連画像'} - page ${pageNo}`
-  )).slice(0, urls.length);
+  const titles = uniqueCandidates
+    .slice(0, urls.length)
+    .map((candidate) => `${itemLike.file_name || '関連画像'} - page ${candidate.page}`);
 
   return { urls, titles };
 }
