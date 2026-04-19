@@ -1236,9 +1236,9 @@ export async function openTextRelatedImageByIndex(resultIndex, imageIndex = 0) {
   utilsShowImageModal(
     selectedUrl,
     selectedTitle,
-    [selectedUrl],
-    0,
-    [selectedTitle]
+    validUrls,
+    safeIndex,
+    validTitles
   );
 }
 
