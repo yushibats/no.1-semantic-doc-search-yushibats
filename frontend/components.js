@@ -662,9 +662,16 @@ function showModal({
       .modern-modal-content {
         font-size: 14px;
         color: #475569;
-        line-height: 1.6;
-        text-align: center;
+        line-height: 1.75;
+        text-align: left;
         white-space: pre-line;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 16px 18px;
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+        max-height: 52vh;
+        overflow: auto;
       }
       
       .modern-modal-footer {
