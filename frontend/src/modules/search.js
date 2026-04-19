@@ -500,6 +500,11 @@ function buildRelatedImagePreview(itemLike) {
   return { urls, titles };
 }
 
+function getPageNumberFromTitle(title = '') {
+  const match = String(title).match(/page\s*(\d+)/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 function preloadImageUrl(url) {
   return new Promise((resolve) => {
     if (!url) {
@@ -1259,7 +1264,12 @@ export async function openTextRelatedImageByIndex(resultIndex, imageIndex = 0) {
     return;
   }
 
-  const safeIndex = Math.min(Math.max(imageIndex, 0), validUrls.length - 1);
+  const targetPageNo = typeof item?.page_no === 'number' && Number.isFinite(item.page_no)
+    ? item.page_no
+    : inferTextRelatedPageNo(item);
+  const matchedPageIndex = validTitles.findIndex((title) => getPageNumberFromTitle(title) === targetPageNo);
+  const preferredIndex = matchedPageIndex >= 0 ? matchedPageIndex : imageIndex;
+  const safeIndex = Math.min(Math.max(preferredIndex, 0), validUrls.length - 1);
   const selectedUrl = validUrls[safeIndex];
   const selectedTitle = validTitles[safeIndex] || 'ページ画像';
   utilsShowImageModal(
