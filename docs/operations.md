@@ -5,8 +5,9 @@
 1. PRの変更内容、CI、必要な検証環境での動作を確認して`main`へマージします。
 2. マージ後のコミットに新しい`v*`タグを作成してpushします。既存タグは付け替えません。
 3. GitHub Actionsが検証後、ソースZIP、OCIスタックZIP、`SHA256SUMS`を**ドラフトリリース**に添付します。
-4. スタックZIPで新規環境への導入を確認し、リリースノートに確認結果・制約を記載して公開します。
-5. 共有するのはそのリリースのURLです。
+4. スタックZIPで新規環境への導入を確認し、リリースノートに確認結果・制約を記載して通常Releaseとして公開します。
+5. 公開後、READMEのDeploy to Oracle Cloudボタンで「スタックの作成」が開き、パッケージが設定されることを確認します。
+6. 利用者にはREADMEまたはそのリリースのURLを共有します。
 
 ローカルで同じ成果物を生成するには、クリーンなチェックアウトで次を実行します。
 
@@ -18,9 +19,15 @@ python3 scripts/package_release.py --ref HEAD
 パッケージ対象はGitにコミットされたファイルだけで、認証ファイルや生成物が紛れた場合は停止します。
 `RELEASE.json`で取得元コミットとファイルハッシュを追跡できます。
 
-公開後にワンクリック導入リンクを案内する場合も、**その公開済みリリース**の
-`semantic-doc-search-stack.zip`を`zipUrl`に指定します。
-整備前のリポジトリや、存在しないリリースへのデプロイボタンは使用しません。
+READMEのDeploy to Oracle Cloudボタンは、次の公開済み最新Releaseアセットを参照します。
+
+```text
+https://github.com/yushibats/no.1-semantic-doc-search-yushibats/releases/latest/download/semantic-doc-search-stack.zip
+```
+
+GitHubで新しい通常Releaseを公開すると、ボタンは同名のアセットへ自動的に切り替わります。
+ドラフトやプレリリースは`releases/latest`の対象外なので、検証中の成果物が利用者へ配布されることはありません。
+Releaseを公開する前に、`semantic-doc-search-stack.zip`が添付されていることを確認してください。
 
 ## 既存環境の更新
 

@@ -25,15 +25,18 @@ flowchart LR
   API --> OCR[OCR・MinerU API 任意]
 ```
 
-## まず使う
+## OCIへデプロイする
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/yushibats/no.1-semantic-doc-search-yushibats/releases/latest/download/semantic-doc-search-stack.zip)
 
 1. [OCIへの導入手順](docs/deployment.md)で必要な権限・ネットワーク・サービスを確認します。
-2. [Releases](https://github.com/yushibats/no.1-semantic-doc-search-yushibats/releases)の
-   `semantic-doc-search-stack.zip`をOCI Resource Managerへアップロードします。
-3. DBとOCIを設定し、[サンプル文書](docs/sample-document.md)で登録・検索を確認します。
+2. 上のボタンからOCIへサインインし、デプロイ先リージョンとコンパートメントを選びます。
+3. 画面に表示される変数を設定し、Planを確認してからApplyします。
+4. DBとOCIを設定し、[サンプル文書](docs/sample-document.md)で登録・検索を確認します。
 
-この形式のリリースがまだない場合は、整備済みコミットから
-`python3 scripts/package_release.py`でスタックZIPを生成できます。
+ボタンは、GitHubで公開されている最新Releaseの`semantic-doc-search-stack.zip`を読み込みます。
+ドラフトまたはプレリリースだけが存在する状態では利用できません。手動アップロードと
+パッケージ作成の方法は[OCIへの導入手順](docs/deployment.md)に記載しています。
 作成するCompute・ADB・ストレージ・AI利用には料金が発生します。
 接続情報・文書・DBデータは利用者ごとに用意します。
 
