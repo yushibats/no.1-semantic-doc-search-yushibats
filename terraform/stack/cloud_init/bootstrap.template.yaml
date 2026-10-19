@@ -12,84 +12,76 @@ packages:
   - netfilter-persistent
 write_files:
   - path: "/u01/aipoc/props/db.env"
-    permissions: "0644"
+    permissions: "0600"
     encoding: "gzip+base64"
     content: |
       ${db_conn}
   - path: "/u01/aipoc/props/adb_name.txt"
-    permissions: "0644"
-    content: ${adb_name}
+    permissions: "0600"
+    content: ${jsonencode(adb_name)}
   - path: "/u01/aipoc/props/compartment_id.txt"
-    permissions: "0644"
-    content: ${comp_id}
+    permissions: "0600"
+    content: ${jsonencode(comp_id)}
   - path: "/u01/aipoc/props/db_password.txt"
-    permissions: "0644"
-    content: ${db_pass}
+    permissions: "0600"
+    content: ${jsonencode(db_pass)}
   - path: "/u01/aipoc/props/adb_dsn.txt"
-    permissions: "0644"
-    content: ${db_dsn}
+    permissions: "0600"
+    content: ${jsonencode(db_dsn)}
   - path: "/u01/aipoc/props/oci_bucket.txt"
-    permissions: "0644"
-    content: ${bucket}
+    permissions: "0600"
+    content: ${jsonencode(bucket)}
   - path: "/u01/aipoc/props/dify_bucket.txt"
-    permissions: "0644"
-    content: ${dify_bucket}
+    permissions: "0600"
+    content: ${jsonencode(dify_bucket)}
   - path: "/u01/aipoc/props/adb_ocid.txt"
-    permissions: "0644"
-    content: ${adb_ocid}
+    permissions: "0600"
+    content: ${jsonencode(adb_ocid)}
   - path: "/u01/aipoc/props/enable_dify.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${enable_dify}
   - path: "/u01/aipoc/props/dify_branch.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${dify_branch}
   - path: "/u01/aipoc/props/deploy_region.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${deploy_region}
   - path: "/u01/aipoc/props/bucket_namespace.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${bucket_namespace}
   - path: "/u01/aipoc/props/oci_access_key.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${oci_access_key}
   - path: "/u01/aipoc/props/oci_secret_key.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${oci_secret_key}
   - path: "/u01/aipoc/props/adb_password.txt"
-    permissions: "0644"
-    content: ${adb_pass}
+    permissions: "0600"
+    content: ${jsonencode(adb_pass)}
   - path: "/u01/aipoc/props/external_api_keys.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${external_api_keys}
   - path: "/u01/aipoc/props/show_ai_assistant.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${show_ai_assistant}
   - path: "/u01/aipoc/props/show_search_tab.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${show_search_tab}
-  - path: "/u01/aipoc/props/enable_text_rag.txt"
-    permissions: "0644"
-    content: |
-      ${enable_text_rag}
-  - path: "/u01/aipoc/props/search_mode.txt"
-    permissions: "0644"
-    content: |
-      ${search_mode}
   - path: "/u01/aipoc/props/compute_subnet_is_private.txt"
-    permissions: "0644"
+    permissions: "0600"
     content: |
       ${compute_subnet_is_private}
   - path: "/u01/aipoc/wallet.zip"
-    permissions: "0644"
+    permissions: "0600"
     encoding: base64
     content: |
       ${wallet}
@@ -99,8 +91,15 @@ runcmd:
   - netfilter-persistent save
   - systemctl enable nginx
   - systemctl start nginx
-  - cd /u01/aipoc
-  - git clone -b main --single-branch https://github.com/yushibats/no.1-semantic-doc-search.git
-  - cd /u01/aipoc/no.1-semantic-doc-search
-  - chmod +x init_script.sh
-  - nohup bash init_script.sh >> /var/log/cloud-init-custom.log 2>&1 &
+  - |
+    set -eu
+    export GIT_TERMINAL_PROMPT=0
+    install -d -m 0755 /u01/aipoc/no.1-semantic-doc-search
+    cd /u01/aipoc/no.1-semantic-doc-search
+    git init
+    git remote add origin '${source_repository_url}'
+    git fetch --depth 1 origin '${source_revision}'
+    git checkout --detach FETCH_HEAD
+    test "$(git rev-parse HEAD)" = '${source_revision}'
+    chmod +x init_script.sh
+    bash init_script.sh

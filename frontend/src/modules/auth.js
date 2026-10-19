@@ -18,6 +18,13 @@ import { appState, setAuthState } from '../state.js';
 // 開発時はViteのプロキシを使うため空文字列、本番ビルド時は環境変数から設定
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
+function directApiUrl(apiBase, endpoint) {
+  if (!apiBase) return endpoint;
+  const base = apiBase.replace(/\/+$/, '');
+  const path = endpoint.replace(/^\/ai\/api(?=\/|$)/, '') || '/';
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 // ========================================
 // グローバル変数
 // ========================================
@@ -35,18 +42,21 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
  * @param {boolean} [config.show_ai_assistant=true] - AIアシスタントを表示するかどうか
  * @param {boolean} [config.show_search_tab=true] - 検索タブを表示するかどうか
  */
+function syncCopilotVisibility(showAiAssistant = appState.get('showAiAssistant')) {
+  const isOpen = appState.get('copilotOpen');
+  const button = document.getElementById('copilotToggleBtn');
+  const panel = document.getElementById('copilotPanel');
+  if (button) button.style.display = showAiAssistant && !isOpen ? 'flex' : 'none';
+  if (panel) panel.style.display = showAiAssistant && isOpen ? 'flex' : 'none';
+}
+
 function applyUIFeatureToggles(config) {
+  const modelName = document.getElementById('copilotModelName');
+  if (modelName) modelName.textContent = config.enterprise_ai_model || '未設定';
+
   // AI Assistantの表示制御
   const showAiAssistant = config.show_ai_assistant !== false; // デフォルトはtrue
-  const copilotToggleBtn = document.getElementById('copilotToggleBtn');
-  const copilotPanel = document.getElementById('copilotPanel');
-  
-  if (showAiAssistant) {
-    if (copilotToggleBtn) copilotToggleBtn.style.display = 'block';
-  } else {
-    if (copilotToggleBtn) copilotToggleBtn.style.display = 'none';
-    if (copilotPanel) copilotPanel.style.display = 'none';
-  }
+  syncCopilotVisibility(showAiAssistant);
   
   // 検索タブの表示制御
   const showSearchTab = config.show_search_tab !== false; // デフォルトはtrue
@@ -61,11 +71,6 @@ function applyUIFeatureToggles(config) {
     } else {
       if (searchTab) searchTab.style.display = 'none';
       if (searchTabContent) searchTabContent.style.display = 'none';
-      // 検索タブが非表示の場合、文書管理タブに切り替え
-      if (searchTabElements.length > 1) {
-        // switchTab関数はapp.jsで定義されているため、ここではコメントアウト
-        // switchTab('documents', { target: searchTabElements[1] });
-      }
     }
   }
   
@@ -82,7 +87,6 @@ function applyUIFeatureToggles(config) {
  * @returns {Promise<void>}
  */
 export async function loadConfig() {
-  console.log('[AUTH.JS] loadConfig が呼び出されました');
   try {
     // API_BASEが空の場合は相対パス、設定されている場合は絶対パス
     const url = API_BASE ? `${API_BASE}/config` : '/ai/api/config';
@@ -93,17 +97,12 @@ export async function loadConfig() {
       // appStateに設定（oci.js等のモジュールから参照されるため）
       appState.set('debugMode', config.debug);
       appState.set('requireLogin', config.require_login);
-      appState.set('enableTextRag', !!config.enable_text_rag);
-      appState.set('searchMode', config.search_mode || 'image');
       appState.set('apiBase', API_BASE);
       
       // UI機能トグルを適用
       applyUIFeatureToggles(config);
-      
-      // console.log('設定を読み込みました:', config);
     }
   } catch (error) {
-    // console.warn('設定の読み込みに失敗しました:', error);
   }
 }
 
@@ -116,7 +115,6 @@ export async function loadConfig() {
  * ユーザー名入力フィールドにフォーカスを当てます。
  */
 export function showLoginModal() {
-  console.log('[AUTH.JS] showLoginModal が呼び出されました');
   const modal = document.getElementById('loginOverlay');
   if (modal) {
     modal.style.display = 'flex';
@@ -132,7 +130,6 @@ export function showLoginModal() {
  * 入力フォームとエラーメッセージをリセットします。
  */
 export function hideLoginModal() {
-  console.log('[AUTH.JS] hideLoginModal が呼び出されました');
   const modal = document.getElementById('loginOverlay');
   if (modal) {
     modal.style.display = 'none';
@@ -151,7 +148,6 @@ export function hideLoginModal() {
  * ログインパスワードの表示/非表示を切り替えます。
  */
 export function toggleLoginPassword() {
-  console.log('[AUTH.JS] toggleLoginPassword が呼び出されました');
   const input = document.getElementById('loginPassword');
   if (!input) return;
   input.type = input.type === 'password' ? 'text' : 'password';
@@ -162,9 +158,8 @@ export function toggleLoginPassword() {
   }
   try {
     input.setSelectionRange(input.value.length, input.value.length);
-  } catch (error) {
-    // Safariではtype切替直後にキャレット指定で例外になる場合がある
-    console.debug('[AUTH.JS] setSelectionRange skipped:', error);
+  } catch {
+    // Safariではtype切替直後にキャレット指定できない場合がある。
   }
 }
 
@@ -181,7 +176,6 @@ export function toggleLoginPassword() {
  * @returns {Promise<void>}
  */
 export async function handleLogin(event) {
-  console.log('[AUTH.JS] handleLogin が呼び出されました');
   event.preventDefault();
   
   const username = document.getElementById('loginUsername').value.trim();
@@ -210,7 +204,7 @@ export async function handleLogin(event) {
     }
     
     const apiBase = appState.get('apiBase') || '';
-    const url = apiBase ? `${apiBase}/api/login` : '/ai/api/login';
+    const url = directApiUrl(apiBase, '/ai/api/login');
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -248,10 +242,13 @@ export async function handleLogin(event) {
       
       // AI Assistantボタンの表示制御（設定に応じて）
       const showAiAssistant = appState.get('showAiAssistant');
-      const copilotBtn = document.getElementById('copilotToggleBtn');
-      if (copilotBtn && showAiAssistant) {
-        copilotBtn.style.display = 'flex';
-      }
+      syncCopilotVisibility(showAiAssistant);
+
+      // 認証前には取得しない検索条件を、ログイン成功後に読み込む
+      await window.searchModule?.loadDynamicSearchFilters?.();
+      // ログイン画面から復帰した場合も、永続化された処理タスクを
+      // すぐにタスクトレイへ戻します（ページ再読み込み時と同じ挙動）。
+      await window.pipelineModule?.restore?.();
     }
   } catch (error) {
     if (errorMessage) {
@@ -276,12 +273,11 @@ export async function handleLogin(event) {
  * @returns {Promise<void>}
  */
 export async function handleLogout() {
-  console.log('[AUTH.JS] handleLogout が呼び出されました');
   try {
     const loginToken = appState.get('loginToken');
     if (loginToken) {
       const apiBase = appState.get('apiBase') || '';
-      const url = apiBase ? `${apiBase}/api/logout` : '/ai/api/logout';
+      const url = directApiUrl(apiBase, '/ai/api/logout');
       await fetch(url, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${loginToken}` }
@@ -320,7 +316,6 @@ export async function handleLogout() {
  * ログイン中はユーザー名を表示し、ログアウト中は非表示にします。
  */
 export function updateUserInfo() {
-  console.log('[AUTH.JS] updateUserInfo が呼び出されました');
   const userInfo = document.getElementById('userInfo');
   const userName = document.getElementById('userName');
   
@@ -343,7 +338,6 @@ export function updateUserInfo() {
  * @returns {Promise<void>}
  */
 export async function checkLoginStatus() {
-  console.log('[AUTH.JS] checkLoginStatus が呼び出されました');
   // ローカルストレージからトークンを取得
   const token = localStorage.getItem('loginToken');
   const user = localStorage.getItem('loginUser');
@@ -398,7 +392,6 @@ export async function checkLoginStatus() {
  * ユーザーに通知を表示し、ログインモーダルを開きます。
  */
 export function forceLogout() {
-  console.log('[AUTH.JS] forceLogout が呼び出されました');
   if (window.UIComponents && window.UIComponents.setSessionTimeoutToastMode) {
     window.UIComponents.setSessionTimeoutToastMode(true);
   }
@@ -421,11 +414,7 @@ export function forceLogout() {
 }
 
 function showAuthenticatedUi() {
-  const showAiAssistant = appState.get('showAiAssistant');
-  const copilotBtn = document.getElementById('copilotToggleBtn');
-  if (copilotBtn && showAiAssistant) {
-    copilotBtn.style.display = 'flex';
-  }
+  syncCopilotVisibility();
 }
 
 function clearStoredAuthState() {
@@ -449,15 +438,8 @@ function clearStoredAuthState() {
  */
 export async function fetchWithAuth(endpoint, options = {}) {
   const apiBase = appState.get('apiBase') || '';
-  const url = apiBase ? `${apiBase}${endpoint}` : endpoint;
+  const url = directApiUrl(apiBase, endpoint);
   const headers = { ...(options.headers || {}) };
-
-  const isSearchRequest = /\/search(?:\/|$)/.test(endpoint || '');
-
-  if (isSearchRequest) {
-    if (!headers['Cache-Control']) headers['Cache-Control'] = 'no-store, no-cache, max-age=0';
-    if (!headers.Pragma) headers.Pragma = 'no-cache';
-  }
 
   const loginToken = localStorage.getItem('loginToken');
   if (loginToken) {
@@ -471,7 +453,6 @@ export async function fetchWithAuth(endpoint, options = {}) {
   try {
     const response = await fetch(url, {
       ...fetchOptions,
-      ...(isSearchRequest ? { cache: 'no-store' } : {}),
       headers,
       ...(controller ? { signal: controller.signal } : {})
     });
@@ -497,12 +478,7 @@ export async function fetchWithAuth(endpoint, options = {}) {
     }
 
     if (error.name === 'AbortError') {
-      throw new Error('リクエストがタイムアウトしました。データベースが起動していない可能性があります。');
-    }
-
-    // ネットワーク未接続・プロキシ未到達時（ブラウザ標準の "Failed to fetch"）
-    if (error instanceof TypeError && /Failed to fetch/i.test(error.message || '')) {
-      throw new Error('APIに接続できませんでした（Failed to fetch）。バックエンド起動状態・ポート（8081）・Viteプロキシ設定を確認してください。');
+      throw new Error('リクエストがタイムアウトしました。しばらくしてから再試行してください。');
     }
 
     throw error;
@@ -520,7 +496,6 @@ export async function fetchWithAuth(endpoint, options = {}) {
  * @throws {Error} APIリクエストが失敗した場合、または認証エラーが発生した場合
  */
 export async function apiCall(endpoint, options = {}) {
-  console.log(`[AUTH.JS] apiCall が呼び出されました: ${endpoint}`);
   try {
     const response = await fetchWithAuth(endpoint, {
       ...options,
@@ -529,7 +504,9 @@ export async function apiCall(endpoint, options = {}) {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || 'リクエストに失敗しました');
+      const requestError = new Error(error.detail || 'リクエストに失敗しました');
+      requestError.status = response.status;
+      throw requestError;
     }
     
     return await response.json();
@@ -557,7 +534,7 @@ window.authModule = {
   loadConfig
 };
 
-// 個別関数も直接登録（後方互換性のため）
+// HTMLのインラインイベントハンドラから参照する関数を公開する。
 window.showLoginModal = showLoginModal;
 window.hideLoginModal = hideLoginModal;
 window.toggleLoginPassword = toggleLoginPassword;

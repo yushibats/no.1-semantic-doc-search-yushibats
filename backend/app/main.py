@@ -1,7 +1,10 @@
 """
 セマンティック文書検索システム - メインAPIアプリケーション
 """
+# ローカルサービスが環境変数を読む前に.envをロードするため、関連importはロード後に置く。
+# ruff: noqa: E402
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -9,7 +12,6 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -21,12 +23,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Query, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pdf2image import convert_from_path
-from PIL import Image as PILImage
 from pydantic import BaseModel
+from openai import AsyncOpenAI
+import oci
 
 # ログ設定
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
@@ -48,27 +50,9 @@ if env_path.exists():
     load_dotenv(env_path)
 
 # モデルのインポート
-from app.models.oci import OCISettings, OCISettingsResponse, OCIConnectionTestRequest, OCIConnectionTestResponse
-from app.models.document import DocumentUploadResponse, DocumentInfo, DocumentListResponse, DocumentDeleteRequest, DocumentDeleteResponse
-from app.models.search import (
-    SearchQuery,
-    SearchResponse,
-    TextIndexRequest,
-    TextIndexResponse,
-    TextSearchQuery,
-    ImageTextVectorSearchQuery,
-    HybridSearchQuery,
-    TextSearchResponse,
-    ImageTextPureVectorSearchQuery,
-    TextChunkSearchResult,
-    HybridSearchResponse,
-    HybridImageSearchResult,
-    ImageSearchResult,
-    ImageTextKeywordSearchResponse,
-    ImageTextKeywordSearchQuery,
-    ImageHybridSearchResponse,
-    KeywordImageHybridSearchQuery,
-)
+from app.models.oci import EnterpriseAISettings, OCISettings, OCISettingsResponse, OCIConnectionTestRequest, OCIConnectionTestResponse
+from app.models.document import DocumentUploadResponse, DocumentInfo, DocumentListResponse, DocumentDeleteResponse
+from app.models.search import SearchQuery, SearchResponse
 from app.models.database import (
     DatabaseSettings,
     DatabaseSettingsResponse,
@@ -90,20 +74,31 @@ from app.models.adb import (
 
 # サービスのインポート
 from app.services.oci_service import oci_service
-# @deprecated: document_processor は非推奨（テキストベース検索は未実装・実装予定なし）
-# from app.services.document_processor import document_processor
 from app.services.database_service import database_service
 from app.services.adb_service import adb_service
 from app.services.ai_copilot import get_copilot_service
 from app.services.image_vectorizer import image_vectorizer
-from app.services.text_rag_processor import TextRAGProcessor
 from app.services.parallel_processor import parallel_processor, JobManager
 from app.utils.auth_util import do_auth, get_username_from_connection_string
-
-text_rag_processor = TextRAGProcessor(
-    oci_service=oci_service,
-    database_service=database_service,
-    image_vectorizer=image_vectorizer,
+from app.utils.sse import heartbeats_until_done
+from app.rag.settings_api import router as retrieval_settings_router
+from app.rag.search_api import router as retrieval_search_router
+from app.rag.pipeline_api import router as pipeline_router
+from app.rag.document_metadata_api import router as document_metadata_router
+from app.rag.document_metadata_schema import (
+    apply_document_library_schema,
+    document_library_schema_status,
+)
+from app.rag.pipeline_dispatcher import pipeline_dispatcher
+from app.rag.pipeline_repository import pipeline_repository
+from app.rag.profile_repository import profile_repository
+from app.rag.search_pipeline import principal_hash, search_pipeline
+from app.rag.oracle_repository import rag_repository
+from app.rag.oracle_schema import (
+    MIGRATION_CONFIRMATION,
+    migrate_to_v4,
+    provision_system_tables,
+    system_table_status,
 )
 
 # ========================================
@@ -113,10 +108,19 @@ text_rag_processor = TextRAGProcessor(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーションのライフサイクル管理"""
-    # startup処理（必要に応じて追加）
+    # Start the dispatcher independently of schema provisioning.  The admin
+    # can apply the destructive migration while the API is running; keeping a
+    # live dispatcher means the migration's initial rebuild job is picked up
+    # immediately after ``wake()`` instead of waiting for a restart.
+    if os.getenv("PIPELINE_IN_PROCESS_DISPATCHER", "true").casefold() in {
+        "1", "true", "yes", "on"
+    }:
+        await pipeline_dispatcher.start()
     yield
     # shutdown処理
     logger.info("アプリケーションシャットダウン開始...")
+
+    await pipeline_dispatcher.stop()
     
     # データベースサービスのシャットダウン
     try:
@@ -135,16 +139,10 @@ app = FastAPI(
     description="OCI Object Storageベースのセマンティック文書検索システム",
     lifespan=lifespan
 )
-
-
-@app.middleware("http")
-async def add_no_store_header_for_search(request: Request, call_next):
-    response = await call_next(request)
-    if request.url.path.startswith("/search"):
-        response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
+app.include_router(retrieval_settings_router)
+app.include_router(retrieval_search_router)
+app.include_router(pipeline_router)
+app.include_router(document_metadata_router)
 
 # CORS設定
 app.add_middleware(
@@ -161,8 +159,6 @@ debug_mode = os.getenv("DEBUG", "False").lower() == "true"
 # UI機能トグル設定
 show_ai_assistant = os.getenv("SHOW_AI_ASSISTANT", "true").lower() == "true"
 show_search_tab = os.getenv("SHOW_SEARCH_TAB", "true").lower() == "true"
-enable_text_rag = os.getenv("ENABLE_TEXT_RAG", "false").lower() == "true"
-search_mode = os.getenv("SEARCH_MODE", "image")
 
 # セッション管理（メモリ内）
 # Token -> {username: str, expires_at: datetime}
@@ -222,14 +218,6 @@ def validate_temp_token(temp_token: str) -> bool:
         return False
     
     return True
-
-def build_public_api_base_url(request: Request) -> str:
-    """フロントエンドから到達可能な公開APIベースURL(/ai/api)を構築する"""
-    forwarded_proto = request.headers.get('X-Forwarded-Proto')
-    forwarded_host = request.headers.get('X-Forwarded-Host')
-    host = forwarded_host or request.headers.get('Host', request.url.netloc)
-    scheme = forwarded_proto or request.url.scheme
-    return f"{scheme}://{host}/ai/api"
 
 class LoginRequest(BaseModel):
     username: str
@@ -305,6 +293,7 @@ async def auth_middleware(request: Request, call_next):
         
     # デバッグモードは認証スキップ
     if debug_mode:
+        request.state.auth_username = "debug-user"
         return await call_next(request)
     
     # 認証情報を取得
@@ -319,6 +308,7 @@ async def auth_middleware(request: Request, call_next):
             api_key = auth_header.split(" ")[1]
             if api_key in EXTERNAL_API_KEYS:
                 logger.info(f"外部APIキー認証成功: path={path}")
+                request.state.auth_username = f"service:{hashlib.sha256(api_key.encode()).hexdigest()}"
                 return await call_next(request)
             else:
                 logger.warning(f"無効なAPIキー: path={path}")
@@ -332,6 +322,7 @@ async def auth_middleware(request: Request, call_next):
     api_key_query = request.query_params.get("api_key")
     if api_key_query and api_key_query in EXTERNAL_API_KEYS:
         logger.info(f"外部APIキー認証成功（クエリパラメータ）: path={path}")
+        request.state.auth_username = f"service:{hashlib.sha256(api_key_query.encode()).hexdigest()}"
         return await call_next(request)
     
     # 一時トークン検証（検索結果URL用、短寿命）
@@ -374,8 +365,7 @@ def get_config():
         "require_login": not debug_mode,
         "show_ai_assistant": show_ai_assistant,
         "show_search_tab": show_search_tab,
-        "enable_text_rag": enable_text_rag,
-        "search_mode": search_mode,
+        "enterprise_ai_model": oci_service.get_enterprise_ai_settings().model
     }
 
 @app.post("/login")
@@ -445,6 +435,60 @@ async def auth_status(request: Request):
 # ========================================
 # OCI設定管理
 # ========================================
+
+@app.get("/oci/enterprise-ai/settings")
+async def get_enterprise_ai_settings():
+    settings = oci_service.get_enterprise_ai_settings()
+    configured = bool(settings.base_url and settings.api_key and settings.model)
+    if settings.api_key:
+        settings.api_key = "[CONFIGURED]"
+    return {"settings": settings, "is_configured": configured}
+
+@app.post("/oci/enterprise-ai/settings")
+async def save_enterprise_ai_settings(settings: EnterpriseAISettings):
+    previous_settings = oci_service.get_enterprise_ai_settings()
+    if settings.api_key == "[CONFIGURED]":
+        settings.api_key = oci_service.get_enterprise_ai_settings().api_key
+    if not all((settings.base_url.strip(), settings.api_key.strip(), settings.model.strip())):
+        raise HTTPException(status_code=400, detail="Base URL、API Key、Modelが必要です")
+    if not settings.base_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Base URLはhttps://で始まる必要があります")
+    oci_service.save_enterprise_ai_settings(settings)
+    if (
+        profile_repository.schema_ready()
+        and (
+            previous_settings.base_url != settings.base_url
+            or previous_settings.project != settings.project
+            or previous_settings.model != settings.model
+        )
+    ):
+        profile_repository.mark_service_reindex_required("vlm")
+    return {"success": True, "message": "OCI Enterprise AI設定を保存しました"}
+
+@app.post("/oci/enterprise-ai/test")
+async def test_enterprise_ai_connection(settings: EnterpriseAISettings):
+    if settings.api_key == "[CONFIGURED]":
+        settings.api_key = oci_service.get_enterprise_ai_settings().api_key
+    if not all((settings.base_url.strip(), settings.api_key.strip(), settings.model.strip())):
+        raise HTTPException(status_code=400, detail="Base URL、API Key、Modelが必要です")
+    if not settings.base_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Base URLはhttps://で始まる必要があります")
+    try:
+        options = {"base_url": settings.base_url.rstrip("/"), "api_key": settings.api_key}
+        if settings.project:
+            options["project"] = settings.project
+        client = AsyncOpenAI(**options)
+        await client.chat.completions.create(
+            model=settings.model,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            temperature=0.0,
+            seed=42,
+            max_tokens=1,
+        )
+        return {"success": True, "message": "接続テストに成功しました"}
+    except Exception as error:
+        logger.error(f"OCI Enterprise AI接続テストエラー: {error}")
+        raise HTTPException(status_code=502, detail=f"接続テストに失敗しました: {error}")
 
 @app.get("/oci/settings", response_model=OCISettingsResponse)
 async def get_oci_settings():
@@ -603,317 +647,169 @@ async def test_object_storage_connection(request: ObjectStorageSettingsRequest):
             "message": f"接続テストに失敗しました: {str(e)}"
         }
 
+_LEGACY_PAGE_IMAGE_PATTERN = re.compile(
+    r"/page_(?:\d{3}|\d{6})(?:_[a-f0-9]{32})?\.png$", re.IGNORECASE
+)
+
+
+def _is_internal_pipeline_object(object_name: str) -> bool:
+    return object_name.startswith("_pipeline/") or "/_pipeline/" in object_name
+
+
+def _filter_source_objects(objects: list[dict]) -> list[dict]:
+    """Object Storage一覧から原本文書だけを残す。"""
+    candidates = [
+        item
+        for item in objects
+        if not str(item.get("name") or "").endswith("/")
+        and not _is_internal_pipeline_object(str(item.get("name") or ""))
+    ]
+    original_bases = {
+        re.sub(r"\.[^.]+$", "", str(item["name"]))
+        for item in candidates
+        if not _LEGACY_PAGE_IMAGE_PATTERN.search(str(item["name"]))
+    }
+    return [
+        item
+        for item in candidates
+        if not (
+            _LEGACY_PAGE_IMAGE_PATTERN.search(str(item["name"]))
+            and str(item["name"]).rsplit("/", 1)[0] in original_bases
+        )
+    ]
+
+
 @app.get("/oci/objects")
 async def list_oci_objects(
     prefix: str = Query(default="", description="プレフィックス（フォルダパス）"),
     page: int = Query(default=1, ge=1, description="ページ番号"),
     page_size: int = Query(default=50, ge=1, le=100, description="ページサイズ"),
-    filter_page_images: str = Query(default="all", description="ページ画像化フィルター: all, done, not_done"),
-    filter_embeddings: str = Query(default="all", description="ベクトル化フィルター: all, done, not_done"),
-    display_type: str = Query(default="files_only", description="表示タイプ: files_only, files_and_images")
+    filter_page_images: str = Query(default="all", pattern="^(all|done|not_done)$"),
+    filter_embeddings: str = Query(default="all", pattern="^(all|done|not_done)$"),
+    display_type: str = Query(
+        default="files_only", pattern="^(files_only|files_and_images)$"
+    ),
+    page_image_release: str = Query(
+        default="latest", pattern="^(latest|draft|serving)$"
+    ),
 ):
-    """OCI Object Storage内のオブジェクト一覧を取得（最適化版）"""
+    """Object Storageは原本の発見のみ、処理状態はArtifact/Releaseから返す。"""
     try:
-        # 環境変数からバケット名を取得
         bucket_name = os.getenv("OCI_BUCKET")
-        
         if not bucket_name:
             raise HTTPException(status_code=400, detail="バケット名が設定されていません")
-        
-        # Namespaceを取得
         namespace_result = oci_service.get_namespace()
         if not namespace_result.get("success"):
-            raise HTTPException(status_code=500, detail=f"Namespace取得エラー: {namespace_result.get('message')}")
-        
+            raise HTTPException(
+                status_code=500,
+                detail=f"Namespace取得エラー: {namespace_result.get('message')}",
+            )
         namespace = namespace_result.get("namespace")
-        
-        # 最適化: ストリーミング処理でメモリ使用量を削減
-        all_objects = []
+
+        all_objects: list[dict] = []
         page_token = None
         max_fetch_count = int(os.getenv("MAX_OBJECTS_FETCH", "10000"))
-        fetch_count = 0
-        
-        # 親ファイル名マップ（高速検索用）
-        parent_files_map = {}  # {parent_folder_path: True}
-        
-        while fetch_count < max_fetch_count:
+        while len(all_objects) < max_fetch_count:
             result = oci_service.list_objects(
                 bucket_name=bucket_name,
                 namespace=namespace,
                 prefix=prefix,
                 page_size=1000,
-                page_token=page_token
+                page_token=page_token,
             )
-            
             if not result.get("success"):
-                raise HTTPException(status_code=500, detail=result.get("message", "オブジェクト一覧取得エラー"))
-            
-            objects = result.get("objects", [])
-            
-            # 最適化: バッチ処理で親ファイルマップを構築
-            for obj in objects:
-                obj_name = obj["name"]
-                if not obj_name.endswith('/'):
-                    obj_name_without_ext = re.sub(r'\.[^.]+$', '', obj_name)
-                    # 拡張子なしファイル名から元のファイル名へのマッピングを保存
-                    parent_files_map[obj_name_without_ext] = obj_name
-            
-            all_objects.extend(objects)
-            fetch_count += len(objects)
-            
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("message", "オブジェクト一覧取得エラー"),
+                )
+            all_objects.extend(result.get("objects", []))
             page_token = result.get("next_start_with")
             if not page_token:
                 break
-        
-        # ページネーション情報を計算
-        total = len(all_objects)
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        
-        # 現在のページのオブジェクトを取得
-        paginated_objects = all_objects[start_idx:end_idx]
-        
-        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
-        
-        # 最適化: 正規表現パターンを事前コンパイル（3桁または6桁に対応）
-        page_image_pattern = re.compile(r'/page_(\d{3}|\d{6})\.png$')
-        
-        # 最適化: O(1)高速検索用のマップを構築
-        page_images_map = {}  # {file_base_name: True}
-        
-        for obj in all_objects:
-            obj_name = obj["name"]
-            if page_image_pattern.search(obj_name):
-                last_slash_index = obj_name.rfind('/')
-                if last_slash_index != -1:
-                    parent_folder = obj_name[:last_slash_index]
-                    page_images_map[parent_folder] = True
-        
-        def is_generated_page_image(object_name: str) -> bool:
-            """ページ画像化で生成されたファイルかどうかを判定（最適化版 O(1)）"""
-            if not page_image_pattern.search(object_name):
-                return False
-            
-            last_slash_index = object_name.rfind('/')
-            if last_slash_index == -1:
-                return False
-            
-            parent_folder_path = object_name[:last_slash_index]
-            return parent_folder_path in parent_files_map
-        
-        def has_page_images_for_file(object_name: str) -> bool:
-            """ファイルに対応するページ画像が存在するか判定（最適化版 O(1)）"""
-            if object_name.endswith('/'):
-                return False
-            
-            file_base_name = re.sub(r'\.[^.]+$', '', object_name)
-            return file_base_name in page_images_map
-        
-        def get_parent_file_from_page_image(page_image_name: str) -> Optional[str]:
-            """ページ画像から親ファイル名（拡張子付き）を取得
-            例: 'file/page_001.png' -> 'file.pdf'
-            """
-            if not page_image_pattern.search(page_image_name):
-                return None
-            
-            last_slash_index = page_image_name.rfind('/')
-            if last_slash_index == -1:
-                return None
-            
-            folder_name = page_image_name[:last_slash_index]
-            # parent_files_mapから元のファイル名（拡張子付き）を取得
-            return parent_files_map.get(folder_name)
-        
-        # 最適化: 1パスで集計とファイル名収集
-        file_count = 0
-        page_image_count = 0
-        file_object_names = []
-        
-        for obj in all_objects:
-            obj_name = obj["name"]
-            if obj_name.endswith('/'):
-                continue
-            
-            if is_generated_page_image(obj_name):
-                page_image_count += 1
-            else:
-                file_count += 1
-                file_object_names.append(obj_name)
-        
-        # ベクトル化状態を一括取得（ファイルタイプのみ）
-        vectorization_status = {}
-        text_index_status = {}
-        if file_object_names:
-            try:
-                vectorization_status = await asyncio.to_thread(image_vectorizer.get_vectorization_status, bucket_name, file_object_names)
-            except Exception as e:
-                logger.warning(f"ベクトル化状態取得エラー: {e}")
 
+        source_objects = _filter_source_objects(all_objects)
+        source_objects.sort(key=lambda item: str(item.get("name") or ""), reverse=True)
+        object_names = [str(item["name"]) for item in source_objects]
+        processing_status: dict[str, dict] = {}
+        if object_names:
             try:
-                text_index_status = await asyncio.to_thread(database_service.get_text_index_status, bucket_name, file_object_names)
-            except Exception as e:
-                logger.warning(f"テキスト索引化状態取得エラー: {e}")
-        
-        # 最適化: 状態付与を効率化
-        for obj in all_objects:
-            obj_name = obj["name"]
-            is_folder = obj_name.endswith('/')
-            is_page_image = not is_folder and is_generated_page_image(obj_name)
-            
-            if is_folder or is_page_image:
-                # フォルダとページ画像は状態を表示しない
-                obj["has_page_images"] = None
-                obj["has_embeddings"] = None
-                obj["has_text_index"] = None
-            else:
-                obj["has_page_images"] = has_page_images_for_file(obj_name)
-                obj["has_embeddings"] = vectorization_status.get(obj_name, False)
-                obj["has_text_index"] = text_index_status.get(obj_name, False)
-        
-        # 最適化: リスト内包表記でフィルタリング
-        file_objects = [
-            obj for obj in all_objects
-            if not obj["name"].endswith('/') and not is_generated_page_image(obj["name"])
-        ]
-        
-        # フィルタリング条件に従ってファイルを絞り込む
-        filtered_files = file_objects
-        
-        # ページ画像化フィルター（ファイルのみ対象）
+                processing_status = await asyncio.to_thread(
+                    pipeline_repository.statuses_by_object,
+                    object_names,
+                    page_image_release,
+                )
+            except Exception as error:
+                logger.warning("文書処理状態取得エラー: %s", error)
+
+        for item in source_objects:
+            status = processing_status.get(str(item["name"]))
+            summary = (status or {}).get("page_images", {}).get("selected")
+            item["processing"] = status
+            item["page_images"] = summary
+            item["has_page_images"] = bool(summary and summary.get("count", 0) > 0)
+            item["has_embeddings"] = bool(status and status.get("serving_release_id"))
+
+        filtered_files = source_objects
         if filter_page_images == "done":
-            filtered_files = [
-                obj for obj in filtered_files
-                if obj["has_page_images"] is True
-            ]
+            filtered_files = [item for item in filtered_files if item["has_page_images"]]
         elif filter_page_images == "not_done":
-            filtered_files = [
-                obj for obj in filtered_files
-                if obj["has_page_images"] is False
-            ]
-        
-        # ベクトル化フィルター（ファイルのみ対象）
+            filtered_files = [item for item in filtered_files if not item["has_page_images"]]
         if filter_embeddings == "done":
-            filtered_files = [
-                obj for obj in filtered_files
-                if obj["has_embeddings"] is True
-            ]
+            filtered_files = [item for item in filtered_files if item["has_embeddings"]]
         elif filter_embeddings == "not_done":
-            filtered_files = [
-                obj for obj in filtered_files
-                if obj["has_embeddings"] is False
-            ]
-        
-        # フィルター条件に一致したファイルの名前セットを作成
-        filtered_file_names = {obj["name"] for obj in filtered_files}
-        
-        # 該当ファイルとその子ページ画像を含める
-        filtered_objects = []
-        for obj in all_objects:
-            obj_name = obj["name"]
-            
-            # フォルダは常に除外（フィルター対象外）
-            if obj_name.endswith('/'):
-                continue
-            
-            # 表示タイプによるページ画像のフィルタリング
-            if display_type == "files_only" and is_generated_page_image(obj_name):
-                # ファイルのみ表示の場合、ページ画像を除外
-                continue
-            
-            # 最適化: ページ画像の親ファイルチェック
-            if is_generated_page_image(obj_name):
-                last_slash_index = obj_name.rfind('/')
-                if last_slash_index != -1:
-                    parent_folder_path = obj_name[:last_slash_index]
-                    # 親フォルダ名がフィルター済みファイル名に含まれるかチェック
-                    if any(re.sub(r'\.[^.]+$', '', name) == parent_folder_path for name in filtered_file_names):
-                        filtered_objects.append(obj)
-            else:
-                # ファイルの場合、フィルター条件に一致しているかチェック
-                if obj_name in filtered_file_names:
-                    filtered_objects.append(obj)
-        
-        # ソートロジック: ファイル先 → ページ画像後、ページ画像は数値順
-        # 期待順序: ファイルA → ファイルAのページ画像(001,002,...,010,011,...) → ファイルB → ...
-        def get_sort_key(obj):
-            """ソートキーを生成"""
-            obj_name = obj["name"]
-            if is_generated_page_image(obj_name):
-                # ページ画像の場合: (親ファイル名, 1, ページ番号)
-                last_slash_index = obj_name.rfind('/')
-                parent_folder = obj_name[:last_slash_index] if last_slash_index != -1 else ""
-                # ページ番号を抽出
-                match = page_image_pattern.search(obj_name)
-                page_num = int(match.group(1)) if match else 0
-                return (parent_folder, 1, page_num)
-            else:
-                # ファイルの場合: (ファイル名（拡張子なし）, 0, 0)
-                file_base_name = re.sub(r'\.[^.]+$', '', obj_name)
-                return (file_base_name, 0, 0)
-        
-        # ソートキーを事前計算してキャッシュ（パフォーマンス最適化）
-        sort_key_cache = {id(obj): get_sort_key(obj) for obj in filtered_objects}
-        
-        # 2段階ソート（Pythonの安定ソートを利用）
-        # 1. まずタイプ（ファイル先）とページ番号（昇順）でソート
-        filtered_objects.sort(key=lambda obj: (
-            sort_key_cache[id(obj)][1],  # タイプ (0=ファイル, 1=ページ画像)
-            sort_key_cache[id(obj)][2]   # ページ番号（昇順）
-        ))
-        # 2. 次に基準名で降順ソート（安定ソートなので、同じ基準名内の順序は維持される）
-        filtered_objects.sort(key=lambda obj: sort_key_cache[id(obj)][0], reverse=True)
-        
-        # フィルタリング後のページネーション情報を計算
-        filtered_total = len(filtered_objects)
+            filtered_files = [item for item in filtered_files if not item["has_embeddings"]]
+
+        filtered_total = len(filtered_files)
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size
-        
-        # 現在のページのオブジェクトを取得
-        paginated_objects = filtered_objects[start_idx:end_idx]
-        
-        total_pages = (filtered_total + page_size - 1) // page_size if filtered_total > 0 else 1
-        
-        # 最適化: 統計情報を効率的に計算
-        filtered_page_image_count = sum(1 for obj in filtered_objects if is_generated_page_image(obj["name"]))
-        filtered_file_count = len(filtered_objects) - filtered_page_image_count
-        
+        total_pages = max(1, (filtered_total + page_size - 1) // page_size)
+        page_image_count = sum(
+            int((item.get("page_images") or {}).get("count") or 0)
+            for item in filtered_files
+        )
+        unfiltered_page_image_count = sum(
+            int((item.get("page_images") or {}).get("count") or 0)
+            for item in source_objects
+        )
         return {
             "success": True,
-            "objects": paginated_objects,
+            "objects": filtered_files[start_idx:end_idx],
             "pagination": {
                 "current_page": page,
                 "total_pages": total_pages,
                 "page_size": page_size,
                 "total": filtered_total,
-                "total_unfiltered": total,
-                "start_row": start_idx + 1 if filtered_total > 0 else 0,
+                "total_unfiltered": len(source_objects),
+                "start_row": start_idx + 1 if filtered_total else 0,
                 "end_row": min(end_idx, filtered_total),
                 "has_next": page < total_pages,
-                "has_prev": page > 1
+                "has_prev": page > 1,
             },
             "statistics": {
-                "file_count": filtered_file_count,
-                "page_image_count": filtered_page_image_count,
-                "total_count": filtered_file_count + filtered_page_image_count,
-                "unfiltered_file_count": file_count,
-                "unfiltered_page_image_count": page_image_count,
-                "unfiltered_total_count": file_count + page_image_count
+                "file_count": filtered_total,
+                "page_image_count": page_image_count,
+                "total_count": filtered_total + page_image_count,
+                "unfiltered_file_count": len(source_objects),
+                "unfiltered_page_image_count": unfiltered_page_image_count,
+                "unfiltered_total_count": (
+                    len(source_objects) + unfiltered_page_image_count
+                ),
             },
             "filters": {
                 "filter_page_images": filter_page_images,
                 "filter_embeddings": filter_embeddings,
-                "display_type": display_type
+                "display_type": display_type,
+                "page_image_release": page_image_release,
             },
             "bucket_name": bucket_name,
             "namespace": namespace,
-            "prefix": prefix
+            "prefix": prefix,
         }
-        
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"OCI Object Storage一覧取得エラー: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as error:
+        logger.error("OCI Object Storage一覧取得エラー: %s", error)
+        raise HTTPException(status_code=500, detail=str(error)) from error
 
 class ObjectDeleteRequest(BaseModel):
     object_names: List[str]
@@ -979,6 +875,10 @@ async def delete_oci_objects(request: ObjectDeleteRequest):
     """
     if not request.object_names or len(request.object_names) == 0:
         raise HTTPException(status_code=400, detail="削除するオブジェクトが指定されていません")
+    if any(_is_internal_pipeline_object(name) for name in request.object_names):
+        raise HTTPException(
+            status_code=400, detail="内部のページ画像は個別に削除できません"
+        )
     
     job_id = str(uuid.uuid4())
     logger.info(f"削除処理開始（並列）: {len(request.object_names)}件, job_id={job_id}")
@@ -993,7 +893,8 @@ async def delete_oci_objects(request: ObjectDeleteRequest):
                 oci_service=oci_service,
                 image_vectorizer=image_vectorizer,
                 database_service=database_service,
-                job_id=job_id
+                job_id=job_id,
+                rag_repository=rag_repository,
             ):
                 event_count += 1
                 # 心拍以外のイベントのみログ出力
@@ -1155,6 +1056,7 @@ async def upload_multiple_documents(files: List[UploadFile] = File(...)):
     - ファイル名衝突回避(UUID)
     - リアルタイム進捗通知
     """
+    job_id = str(uuid.uuid4())
     
     async def generate_upload_events():
         try:
@@ -1196,7 +1098,7 @@ async def upload_multiple_documents(files: List[UploadFile] = File(...)):
             failed_count = 0
             
             # 開始イベント送信
-            start_event = {"type": "start", "total_files": len(files)}
+            start_event = {"type": "start", "job_id": job_id, "total_files": len(files)}
             yield f"data: {json.dumps(start_event, ensure_ascii=False)}\n\n"
             
             # 各ファイルを処理
@@ -1326,14 +1228,33 @@ async def upload_multiple_documents(files: List[UploadFile] = File(...)):
                     # ファイルを先頭にリセット
                     file.file.seek(0)
                     
-                    # OCIに直接アップロード
-                    upload_success = oci_service.upload_file(
-                        file_content=file.file,
-                        object_name=oci_object_name,
-                        content_type=content_type or f"application/{file_ext}",
-                        original_filename=file.filename,
-                        file_size=file_size
+                    upload_started_at = time.time()
+                    upload_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            oci_service.upload_file,
+                            file_content=file.file,
+                            object_name=oci_object_name,
+                            content_type=content_type or f"application/{file_ext}",
+                            original_filename=file.filename,
+                            file_size=file_size
+                        )
                     )
+                    async for heartbeat_event in heartbeats_until_done(
+                        upload_task,
+                        lambda: {
+                            "type": "heartbeat",
+                            "job_id": job_id,
+                            "file_index": idx,
+                            "total_files": len(files),
+                            "file_name": file.filename,
+                            "file_size": file_size,
+                            "elapsed_seconds": int(time.time() - upload_started_at),
+                            "status": "uploading",
+                        },
+                    ):
+                        yield f"data: {json.dumps(heartbeat_event, ensure_ascii=False)}\n\n"
+
+                    upload_success = await upload_task
                     
                     if not upload_success:
                         error_msg = "Object Storageアップロード失敗"
@@ -1428,7 +1349,8 @@ async def upload_multiple_documents(files: List[UploadFile] = File(...)):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
+            "X-Accel-Buffering": "no",
+            "X-Job-ID": job_id
         }
     )
 
@@ -1498,41 +1420,43 @@ async def delete_document(document_id: str):
         bucket_name = os.getenv("OCI_BUCKET")
         file_id = None
         
-        logger.info(f"[DEBUG] object_name取得: {object_name}")
-        logger.info(f"[DEBUG] bucket_name: {bucket_name}")
-        
         if bucket_name:
             try:
-                logger.info(f"[DEBUG] get_file_id_by_object_name呼び出し: bucket={bucket_name}, object_name={object_name}")
-                file_id = await asyncio.to_thread(image_vectorizer.get_file_id_by_object_name, bucket_name, object_name)
-                if file_id:
-                    logger.info(f"[DEBUG] FILE_ID取得成功: FILE_ID={file_id}, object_name={object_name}")
-                else:
-                    logger.warning(f"[DEBUG] FILE_IDが見つかりません（ベクトル化されていない可能性）: object_name={object_name}")
-            except Exception as e:
-                logger.error(f"[DEBUG] FILE_ID取得エラー: {e}", exc_info=True)
+                file_id = await asyncio.to_thread(
+                    image_vectorizer.get_file_id_by_object_name, bucket_name, object_name
+                )
+                if file_id is None:
+                    logger.debug("FILE_INFOレコードなし: object_name=%s", object_name)
+            except Exception as error:
+                logger.error("FILE_INFO検索エラー: %s", error, exc_info=True)
         else:
-            logger.warning(f"[DEBUG] OCI_BUCKET環境変数が設定されていません")
+            logger.warning("OCI_BUCKET環境変数が設定されていません")
         
         # ステップ2: FILE_INFOテーブルのレコード削除（IMG_EMBEDDINGSはCASCADE制約で自動削除）
         if file_id:
             try:
-                logger.info(f"[DEBUG] FILE_INFOレコード削除開始: FILE_ID={file_id}")
-                
                 # FILE_INFOレコードを削除（IMG_EMBEDDINGSはCASCADE制約で自動削除）
                 delete_result = await asyncio.to_thread(database_service.delete_file_info_records, [str(file_id)])
                 
-                logger.info(f"[DEBUG] delete_file_info_records結果: {delete_result}")
-                
                 if not delete_result.get("success"):
-                    logger.warning(f"[DEBUG] FILE_INFOレコード削除失敗: {delete_result.get('message')}")
+                    logger.warning("FILE_INFOレコード削除失敗: %s", delete_result.get("message"))
                 else:
-                    logger.info(f"[DEBUG] FILE_INFOレコード削除成功: {delete_result.get('deleted_count')}件")
+                    logger.debug(
+                        "FILE_INFOレコード削除成功: %s件", delete_result.get("deleted_count")
+                    )
+            except Exception as error:
+                # Object Storageの削除は継続する。
+                logger.error("FILE_INFOレコード削除エラー: %s", error, exc_info=True)
+
+        if bucket_name and profile_repository.schema_ready():
+            try:
+                await asyncio.to_thread(
+                    rag_repository.delete_document_by_object,
+                    bucket=bucket_name,
+                    object_name=object_name,
+                )
             except Exception as e:
-                # データベース削除に失敗しても続行（ファイルは削除する）
-                logger.error(f"[DEBUG] FILE_INFOレコード削除エラー: {e}", exc_info=True)
-        else:
-            logger.info(f"[DEBUG] FILE_IDが存在しないため、データベース削除をスキップ")
+                logger.error(f"RAG文書レコード削除エラー: {e}", exc_info=True)
         
         # ステップ3-5: Object Storageからファイルと画像を削除
         # oci_service.delete_objects()は既に以下の順序で削除を実行:
@@ -1598,8 +1522,84 @@ async def delete_document(document_id: str):
 # セマンティック検索
 # ========================================
 
+async def _legacy_search_from_profiles(
+    *,
+    request: Request,
+    query_text: str,
+    top_k: int,
+    filename_filter: str | None = None,
+    image: bytes | None = None,
+    image_media_type: str = "image/png",
+) -> SearchResponse:
+    """Adapt v2 profile retrieval to the stable legacy file/image response shape."""
+    from app.models.search import FileSearchResult, ImageSearchResult
+    from urllib.parse import quote
+
+    result = await search_pipeline.search(
+        query=query_text,
+        top_k=top_k,
+        field_filters=[],
+        document_types=[],
+        current_version_only=True,
+        user_hash=principal_hash(getattr(request.state, "auth_username", None)),
+        filename_filter=filename_filter,
+        image=image,
+        image_media_type=image_media_type,
+    )
+    documents = result.results
+    scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", request.url.netloc))
+    base_url = f"{scheme}://{host}"
+    token = generate_temp_token(source="legacy_profile_search")
+
+    def object_url(bucket: str, object_name: str) -> str:
+        return f"{base_url}/object/{quote(bucket, safe='')}/{quote(object_name, safe='/')}?t={token}"
+
+    max_score = max((item.score for item in documents), default=1.0) or 1.0
+    files: list[FileSearchResult] = []
+    total_images = 0
+    for document in documents:
+        images: list[ImageSearchResult] = []
+        seen_assets: set[str] = set()
+        for evidence in document.evidence:
+            if not evidence.asset_url or evidence.asset_url in seen_assets:
+                continue
+            seen_assets.add(evidence.asset_url)
+            evidence_score = evidence.rerank_score if evidence.rerank_score is not None else evidence.score
+            images.append(
+                ImageSearchResult(
+                    embed_id=evidence.evidence_id,
+                    bucket=document.bucket,
+                    object_name=evidence.asset_url,
+                    page_number=evidence.page_number,
+                    vector_distance=max(0.0, 1.0 - min(1.0, evidence_score / max_score)),
+                    content_type="image/png",
+                    url=object_url(document.bucket, evidence.asset_url),
+                )
+            )
+        total_images += len(images)
+        files.append(
+            FileSearchResult(
+                file_id=document.document_id,
+                bucket=document.bucket,
+                object_name=document.object_name,
+                original_filename=document.file_name,
+                min_distance=max(0.0, 1.0 - min(1.0, document.score / max_score)),
+                matched_images=images,
+                url=object_url(document.bucket, document.object_name),
+            )
+        )
+    return SearchResponse(
+        success=True,
+        query=query_text,
+        results=files,
+        total_files=len(files),
+        total_images=total_images,
+        processing_time=result.processing_time,
+    )
+
 @app.post("/search", response_model=SearchResponse)
-async def search_documents(query: SearchQuery, request: Request):
+async def search_documents(query: SearchQuery, request: Request, response: Response):
     """
     セマンティック検索を実行(Oracle Database 26aiのベクトル検索を使用)
     
@@ -1607,6 +1607,17 @@ async def search_documents(query: SearchQuery, request: Request):
     URLには認証情報(APIキーまたはセッショントークン)が付与される
     """
     try:
+        if profile_repository.schema_ready():
+            response.headers["Deprecation"] = "true"
+            response.headers["X-Min-Score-Deprecated"] = "true"
+            response.headers["Sunset"] = "Wed, 09 Jul 2027 00:00:00 GMT"
+            response.headers["Link"] = '</search/v2>; rel="successor-version"'
+            return await _legacy_search_from_profiles(
+                request=request,
+                query_text=query.query,
+                top_k=query.top_k or 10,
+                filename_filter=query.filename_filter,
+            )
         start_time = time.time()
         
         logger.info(f"検索開始: query='{query.query}', top_k={query.top_k}, min_score={query.min_score}, filename_filter='{query.filename_filter}'")
@@ -1652,8 +1663,13 @@ async def search_documents(query: SearchQuery, request: Request):
         from app.models.search import FileSearchResult, ImageSearchResult
         from urllib.parse import quote
         
-        # フロントエンドから到達可能な公開APIベースURLを構築
-        base_url = build_public_api_base_url(request)
+        # ベースURLをリクエストから取得(絶対URL生成用)
+        # X-Forwarded-* ヘッダーを優先(nginxプロキシ対応)
+        scheme = request.headers.get('X-Forwarded-Proto', request.url.scheme)
+        host = request.headers.get('X-Forwarded-Host', request.headers.get('Host', request.url.netloc))
+        
+        # ベースURLを構築(外部APIはバックエンドに直接アクセスするため/ai/apiプレフィックス不要)
+        base_url = f"{scheme}://{host}"
         
         # 一時トークンを生成（短寿命、安全）
         # 元の認証情報(APIキーやセッショントークン)はURLに露出させない
@@ -1755,337 +1771,14 @@ async def search_documents(query: SearchQuery, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/documents/index-text", response_model=TextIndexResponse)
-async def index_text_documents(request: TextIndexRequest):
-    """PDF/DOCXをテキスト索引化してTEXT_CHUNKSに保存"""
-    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
-        raise HTTPException(status_code=403, detail="Text RAG is disabled")
-
-    result = await asyncio.to_thread(
-        text_rag_processor.index_documents,
-        request.object_names,
-        request.max_chars or 1200,
-    )
-    return TextIndexResponse(**result)
-
-
-@app.post("/search/text", response_model=TextSearchResponse)
-async def search_text_documents(query: TextSearchQuery):
-    """TEXT_CHUNKSを対象にテキスト検索を実行"""
-    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
-        raise HTTPException(status_code=403, detail="Text RAG is disabled")
-
-    result = await asyncio.to_thread(
-        text_rag_processor.search_text,
-        query.query,
-        query.top_k or 10,
-        query.min_score if query.min_score is not None else 0.7,
-        query.filename_filter,
-    )
-    typed_results = [TextChunkSearchResult(**r) for r in result.get("results", [])]
-    return TextSearchResponse(
-        success=result.get("success", False),
-        query=result.get("query", query.query),
-        results=typed_results,
-        total=result.get("total", len(typed_results)),
-        message=result.get("message"),
-    )
-
-
-@app.post("/search/hybrid", response_model=HybridSearchResponse)
-async def search_hybrid_documents(query: HybridSearchQuery, request: Request):
-    """画像＋テキスト混在のハイブリッド検索"""
-    if not enable_text_rag and search_mode not in ("hybrid", "all"):
-        raise HTTPException(status_code=403, detail="Hybrid search is disabled")
-
-    start_time = time.time()
-
-    text_result = await asyncio.to_thread(
-        text_rag_processor.search_hybrid,
-        query.query,
-        query.top_k or 10,
-        query.min_score if query.min_score is not None else 0.7,
-        query.filename_filter,
-        query.vector_weight if query.vector_weight is not None else 0.7,
-        query.keyword_weight if query.keyword_weight is not None else 0.3,
-    )
-
-    image_query_embedding = await asyncio.to_thread(image_vectorizer.generate_text_embedding, query.query)
-    image_rows = []
-    if image_query_embedding is not None:
-        image_rows = await image_vectorizer.search_similar_images_async(
-            query_embedding=image_query_embedding,
-            limit=max((query.top_k or 10) * 3, query.top_k or 10),
-            threshold=query.min_score if query.min_score is not None else 0.7,
-            filename_filter=query.filename_filter,
-        ) or []
-
-    from collections import defaultdict
-    from urllib.parse import quote
-
-    base_url = build_public_api_base_url(request)
-    temp_token = generate_temp_token(source="hybrid_search")
-    auth_query_param = f"?t={temp_token}"
-
-    def build_absolute_url(bucket: str, object_name: str) -> str:
-        encoded_name = quote(object_name, safe='/')
-        return f"{base_url}/object/{bucket}/{encoded_name}{auth_query_param}"
-
-    typed_text_results = []
-    for r in text_result.get("results", []):
-        row = dict(r)
-        row["source_type"] = "text"
-        if row.get("bucket") and row.get("object_name"):
-            row["file_url"] = build_absolute_url(row["bucket"], row["object_name"])
-        typed_text_results.append(TextChunkSearchResult(**row))
-
-    files_dict = defaultdict(lambda: {
-        'file_id': None,
-        'bucket': None,
-        'object_name': None,
-        'original_filename': None,
-        'file_size': None,
-        'content_type': None,
-        'uploaded_at': None,
-        'min_distance': float('inf'),
-        'images': [],
-    })
-
-    for row in image_rows:
-        file_id = row['file_id']
-        if files_dict[file_id]['file_id'] is None:
-            files_dict[file_id]['file_id'] = row['file_id']
-            files_dict[file_id]['bucket'] = row['file_bucket']
-            files_dict[file_id]['object_name'] = row['file_object_name']
-            files_dict[file_id]['original_filename'] = row.get('original_filename')
-            files_dict[file_id]['file_size'] = row.get('file_size')
-            files_dict[file_id]['content_type'] = row.get('file_content_type')
-            files_dict[file_id]['uploaded_at'] = row.get('uploaded_at')
-
-        distance = float(row['vector_distance'])
-        if distance < files_dict[file_id]['min_distance']:
-            files_dict[file_id]['min_distance'] = distance
-
-        files_dict[file_id]['images'].append(
-            ImageSearchResult(
-                embed_id=row['embed_id'],
-                bucket=row['bucket'],
-                object_name=row['object_name'],
-                page_number=row['page_number'],
-                vector_distance=distance,
-                content_type=row.get('content_type'),
-                file_size=row.get('img_file_size'),
-                url=build_absolute_url(row['bucket'], row['object_name']),
-            )
-        )
-
-    typed_image_results = []
-    image_weight = 1.0 - (query.vector_weight if query.vector_weight is not None else 0.7)
-    for file_data in files_dict.values():
-        sorted_images = sorted(file_data['images'], key=lambda x: x.vector_distance)
-        image_score = max(0.0, min(1.0, 1.0 - file_data['min_distance']))
-        typed_image_results.append(
-            HybridImageSearchResult(
-                source_type="image",
-                file_id=file_data['file_id'],
-                bucket=file_data['bucket'],
-                object_name=file_data['object_name'],
-                original_filename=file_data['original_filename'],
-                file_size=file_data['file_size'],
-                content_type=file_data['content_type'],
-                uploaded_at=file_data['uploaded_at'],
-                min_distance=file_data['min_distance'],
-                matched_images=sorted_images,
-                url=build_absolute_url(file_data['bucket'], file_data['object_name']),
-                hybrid_score=image_weight * image_score,
-                scores={
-                    "image": image_score,
-                    "text_vector": None,
-                    "keyword": None,
-                },
-            )
-        )
-
-    combined_results = sorted(
-        [*typed_text_results, *typed_image_results],
-        key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0,
-        reverse=True,
-    )[: query.top_k or 10]
-
-    processing_time = time.time() - start_time
-    return HybridSearchResponse(
-        success=text_result.get("success", False) or bool(typed_image_results),
-        query=text_result.get("query", query.query),
-        results=combined_results,
-        total=len(combined_results),
-        message=text_result.get("message"),
-        processing_time=processing_time,
-        weights={
-            "vector_weight": query.vector_weight if query.vector_weight is not None else 0.7,
-            "keyword_weight": query.keyword_weight if query.keyword_weight is not None else 0.3,
-            "image_weight": image_weight,
-        },
-    )
-
-
-@app.post("/search/image-text-vector", response_model=HybridSearchResponse)
-async def search_image_text_vector_documents(query: ImageTextVectorSearchQuery, request: Request):
-    """画像ベクトル + テキストベクトル + キーワードのハイブリッド検索（新名称エンドポイント）"""
-    return await search_hybrid_documents(query, request)
-
-
-@app.post("/search/image-text", response_model=HybridSearchResponse)
-async def search_image_text_documents(query: ImageTextPureVectorSearchQuery, request: Request):
-    """画像ベクトル + テキストベクトルのみの検索"""
-    if not enable_text_rag and search_mode not in ("text", "hybrid", "all"):
-        raise HTTPException(status_code=403, detail="Image-text search is disabled")
-
-    start_time = time.time()
-
-    image_weight = max(0.0, min(1.0, float(query.image_weight if query.image_weight is not None else 0.5)))
-    vector_weight = max(0.0, min(1.0, float(query.vector_weight if query.vector_weight is not None else 0.5)))
-    weight_sum = image_weight + vector_weight
-    if weight_sum <= 0:
-        image_weight = 0.5
-        vector_weight = 0.5
-        weight_sum = 1.0
-
-    normalized_image_weight = image_weight / weight_sum
-    normalized_vector_weight = vector_weight / weight_sum
-
-    text_result = await asyncio.to_thread(
-        text_rag_processor.search_vector_only,
-        query.query,
-        query.top_k or 10,
-        query.min_score if query.min_score is not None else 0.7,
-        query.filename_filter,
-    )
-
-    image_query_embedding = await asyncio.to_thread(image_vectorizer.generate_text_embedding, query.query)
-    image_rows = []
-    if image_query_embedding is not None:
-        image_rows = await image_vectorizer.search_similar_images_async(
-            query_embedding=image_query_embedding,
-            limit=max((query.top_k or 10) * 3, query.top_k or 10),
-            threshold=query.min_score if query.min_score is not None else 0.7,
-            filename_filter=query.filename_filter,
-        ) or []
-
-    from collections import defaultdict
-    from urllib.parse import quote
-
-    base_url = build_public_api_base_url(request)
-    temp_token = generate_temp_token(source="image_text_search")
-    auth_query_param = f"?t={temp_token}"
-
-    def build_absolute_url(bucket: str, object_name: str) -> str:
-        encoded_name = quote(object_name, safe='/')
-        return f"{base_url}/object/{bucket}/{encoded_name}{auth_query_param}"
-
-    typed_text_results = []
-    for r in text_result.get("results", []):
-        row = dict(r)
-        row["source_type"] = "text"
-        row["hybrid_score"] = normalized_vector_weight * float(row.get("scores", {}).get("text_vector", 0.0))
-        if row.get("bucket") and row.get("object_name"):
-            row["file_url"] = build_absolute_url(row["bucket"], row["object_name"])
-        typed_text_results.append(TextChunkSearchResult(**row))
-
-    files_dict = defaultdict(lambda: {
-        'file_id': None,
-        'bucket': None,
-        'object_name': None,
-        'original_filename': None,
-        'file_size': None,
-        'content_type': None,
-        'uploaded_at': None,
-        'min_distance': float('inf'),
-        'images': [],
-    })
-
-    for row in image_rows:
-        file_id = row['file_id']
-        if files_dict[file_id]['file_id'] is None:
-            files_dict[file_id]['file_id'] = row['file_id']
-            files_dict[file_id]['bucket'] = row['file_bucket']
-            files_dict[file_id]['object_name'] = row['file_object_name']
-            files_dict[file_id]['original_filename'] = row.get('original_filename')
-            files_dict[file_id]['file_size'] = row.get('file_size')
-            files_dict[file_id]['content_type'] = row.get('file_content_type')
-            files_dict[file_id]['uploaded_at'] = row.get('uploaded_at')
-
-        distance = float(row['vector_distance'])
-        if distance < files_dict[file_id]['min_distance']:
-            files_dict[file_id]['min_distance'] = distance
-
-        files_dict[file_id]['images'].append(
-            ImageSearchResult(
-                embed_id=row['embed_id'],
-                bucket=row['bucket'],
-                object_name=row['object_name'],
-                page_number=row['page_number'],
-                vector_distance=distance,
-                content_type=row.get('content_type'),
-                file_size=row.get('img_file_size'),
-                url=build_absolute_url(row['bucket'], row['object_name']),
-            )
-        )
-
-    typed_image_results = []
-    for file_data in files_dict.values():
-        sorted_images = sorted(file_data['images'], key=lambda x: x.vector_distance)
-        image_score = max(0.0, min(1.0, 1.0 - file_data['min_distance']))
-        typed_image_results.append(
-            HybridImageSearchResult(
-                source_type="image",
-                file_id=file_data['file_id'],
-                bucket=file_data['bucket'],
-                object_name=file_data['object_name'],
-                original_filename=file_data['original_filename'],
-                file_size=file_data['file_size'],
-                content_type=file_data['content_type'],
-                uploaded_at=file_data['uploaded_at'],
-                min_distance=file_data['min_distance'],
-                matched_images=sorted_images,
-                url=build_absolute_url(file_data['bucket'], file_data['object_name']),
-                hybrid_score=normalized_image_weight * image_score,
-                scores={
-                    "image": image_score,
-                    "text_vector": None,
-                    "keyword": 0.0,
-                },
-            )
-        )
-
-    combined_results = sorted(
-        [*typed_text_results, *typed_image_results],
-        key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0,
-        reverse=True,
-    )[: query.top_k or 10]
-
-    processing_time = time.time() - start_time
-    return HybridSearchResponse(
-        success=text_result.get("success", False) or bool(typed_image_results),
-        query=text_result.get("query", query.query),
-        results=combined_results,
-        total=len(combined_results),
-        message=text_result.get("message"),
-        processing_time=processing_time,
-        weights={
-            "image_weight": normalized_image_weight,
-            "vector_weight": normalized_vector_weight,
-            "keyword_weight": 0.0,
-        },
-    )
-
-
 @app.post("/search/image", response_model=SearchResponse)
 async def search_documents_by_image(
+    request: Request,
+    response: Response,
     image: UploadFile = File(...),
     top_k: int = Form(10),
     min_score: float = Form(0.7),
     filename_filter: str = Form(None),
-    request: Request = None
 ):
     """
     画像によるセマンティック検索を実行
@@ -2101,6 +1794,24 @@ async def search_documents_by_image(
         SearchResponse: 検索結果（ファイル単位で集約）
     """
     try:
+        if profile_repository.schema_ready():
+            content = await image.read()
+            if not content or len(content) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="画像は1 byte以上10 MiB以下で指定してください")
+            if image.content_type not in {"image/png", "image/jpeg", "image/webp"}:
+                raise HTTPException(status_code=400, detail="PNG、JPEG、WebP画像を指定してください")
+            response.headers["Deprecation"] = "true"
+            response.headers["X-Min-Score-Deprecated"] = "true"
+            response.headers["Sunset"] = "Wed, 09 Jul 2027 00:00:00 GMT"
+            response.headers["Link"] = '</search/v2/image>; rel="successor-version"'
+            return await _legacy_search_from_profiles(
+                request=request,
+                query_text="",
+                top_k=top_k,
+                filename_filter=filename_filter,
+                image=content,
+                image_media_type=image.content_type,
+            )
         start_time = time.time()
         
         # ファイル拡張子とMIMEタイプの検証
@@ -2169,8 +1880,10 @@ async def search_documents_by_image(
         from app.models.search import FileSearchResult, ImageSearchResult
         from urllib.parse import quote
         
-        # フロントエンドから到達可能な公開APIベースURLを構築
-        base_url = build_public_api_base_url(request)
+        # ベースURLをリクエストから取得
+        scheme = request.headers.get('X-Forwarded-Proto', request.url.scheme)
+        host = request.headers.get('X-Forwarded-Host', request.headers.get('Host', request.url.netloc))
+        base_url = f"{scheme}://{host}"
         
         # 一時トークンを生成
         temp_token = generate_temp_token(source="image_search")
@@ -2266,219 +1979,6 @@ async def search_documents_by_image(
     except Exception as e:
         logger.error(f"画像検索エラー: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/search/image-hybrid", response_model=ImageHybridSearchResponse)
-async def search_documents_by_image_hybrid(
-    query: KeywordImageHybridSearchQuery,
-    request: Request,
-):
-    """キーワード入力に対して、画像ベクトル + TEXT_CHUNKSキーワードでハイブリッド検索"""
-    try:
-        start_time = time.time()
-
-        image_weight = max(0.0, min(1.0, float(query.image_weight if query.image_weight is not None else 0.7)))
-        keyword_weight = max(0.0, min(1.0, float(query.keyword_weight if query.keyword_weight is not None else 0.3)))
-        weight_sum = image_weight + keyword_weight
-        if weight_sum <= 0:
-            image_weight = 0.7
-            keyword_weight = 0.3
-            weight_sum = 1.0
-
-        normalized_vector_weight = image_weight / weight_sum
-        normalized_keyword_weight = keyword_weight / weight_sum
-
-        query_embedding = await asyncio.to_thread(
-            image_vectorizer.generate_text_embedding,
-            query.query,
-        )
-        if query_embedding is None:
-            return ImageHybridSearchResponse(
-                success=False,
-                query=query.query,
-                results=[],
-                total=0,
-                total_files=0,
-                total_images=0,
-                message="クエリembedding生成に失敗しました",
-                processing_time=time.time() - start_time,
-                weights={
-                    "image_weight": normalized_vector_weight,
-                    "keyword_weight": normalized_keyword_weight,
-                },
-            )
-
-        image_rows = await image_vectorizer.search_similar_images_async(
-            query_embedding=query_embedding,
-            limit=max((query.top_k or 10) * 5, query.top_k or 10),
-            threshold=query.min_score if query.min_score is not None else 0.7,
-            filename_filter=query.filename_filter,
-        ) or []
-
-        keyword_terms = [t for t in re.split(r"\s+", (query.query or "").strip()) if t]
-        text_rows = []
-        if keyword_terms:
-            text_rows = await asyncio.to_thread(
-                database_service.search_text_chunks_by_keyword,
-                query.query,
-                max((query.top_k or 10) * 5, query.top_k or 10),
-                query.filename_filter,
-            ) or []
-
-        from collections import defaultdict
-        from urllib.parse import quote
-
-        base_url = build_public_api_base_url(request)
-        temp_token = generate_temp_token(source="image_hybrid_search")
-        auth_query_param = f"?t={temp_token}"
-
-        def build_absolute_url(bucket: str, object_name: str) -> str:
-            encoded_name = quote(object_name, safe='/')
-            return f"{base_url}/object/{bucket}/{encoded_name}{auth_query_param}"
-
-        files_dict = defaultdict(lambda: {
-            "file_id": None,
-            "bucket": None,
-            "object_name": None,
-            "original_filename": None,
-            "file_size": None,
-            "content_type": None,
-            "uploaded_at": None,
-            "min_distance": float("inf"),
-            "images": [],
-            "scores": {
-                "image": 0.0,
-                "keyword": 0.0,
-            },
-            "keyword_matches": [],
-        })
-
-        for row in image_rows:
-            file_id = row["file_id"]
-            file_entry = files_dict[file_id]
-            if file_entry["file_id"] is None:
-                file_entry["file_id"] = row["file_id"]
-                file_entry["bucket"] = row["file_bucket"]
-                file_entry["object_name"] = row["file_object_name"]
-                file_entry["original_filename"] = row.get("original_filename")
-                file_entry["file_size"] = row.get("file_size")
-                file_entry["content_type"] = row.get("file_content_type")
-                file_entry["uploaded_at"] = row.get("uploaded_at")
-
-            distance = float(row["vector_distance"])
-            if distance < file_entry["min_distance"]:
-                file_entry["min_distance"] = distance
-                file_entry["scores"]["image"] = max(0.0, min(1.0, 1.0 - distance))
-
-            file_entry["images"].append(
-                ImageSearchResult(
-                    embed_id=row["embed_id"],
-                    bucket=row["bucket"],
-                    object_name=row["object_name"],
-                    page_number=row["page_number"],
-                    vector_distance=distance,
-                    content_type=row.get("content_type"),
-                    file_size=row.get("img_file_size"),
-                    url=build_absolute_url(row["bucket"], row["object_name"]),
-                )
-            )
-
-        query_token_count = len(keyword_terms)
-        keyword_rows_by_object: Dict[str, List[dict]] = defaultdict(list)
-        for row in text_rows:
-            object_name = row.get("object_name")
-            if not object_name:
-                continue
-
-            chunk_text = row.get("chunk_text", "") or ""
-            keyword_hit_count = sum(1 for term in keyword_terms if term.lower() in chunk_text.lower())
-            keyword_score = (keyword_hit_count / query_token_count) if query_token_count > 0 else 0.0
-
-            keyword_match = {
-                "chunk_id": row.get("chunk_id"),
-                "page_number": row.get("page_number"),
-                "chunk_index": row.get("chunk_index"),
-                "chunk_text": chunk_text,
-                "char_count": row.get("char_count"),
-                "keyword_score": keyword_score,
-            }
-            keyword_rows_by_object[object_name].append(keyword_match)
-
-        for file_data in files_dict.values():
-            object_name = file_data.get("object_name")
-            keyword_matches = keyword_rows_by_object.get(object_name, [])
-            if not keyword_matches:
-                continue
-
-            file_data["keyword_matches"] = keyword_matches
-            file_data["scores"]["keyword"] = max(
-                (match.get("keyword_score", 0.0) for match in keyword_matches),
-                default=0.0,
-            )
-
-        typed_results = []
-        for file_data in files_dict.values():
-            sorted_images = sorted(file_data["images"], key=lambda x: x.vector_distance)
-            hybrid_score = (
-                normalized_vector_weight * file_data["scores"].get("image", 0.0)
-                + normalized_keyword_weight * file_data["scores"].get("keyword", 0.0)
-            )
-            matched_images = sorted_images
-
-            typed_results.append(
-                HybridImageSearchResult(
-                    source_type="image",
-                    file_id=file_data["file_id"] if isinstance(file_data["file_id"], int) else -1,
-                    bucket=file_data["bucket"],
-                    object_name=file_data["object_name"],
-                    original_filename=file_data["original_filename"],
-                    file_size=file_data["file_size"],
-                    content_type=file_data["content_type"],
-                    uploaded_at=file_data["uploaded_at"],
-                    min_distance=file_data["min_distance"],
-                    matched_images=matched_images,
-                    url=build_absolute_url(file_data["bucket"], file_data["object_name"]) if file_data["bucket"] and file_data["object_name"] else None,
-                    hybrid_score=hybrid_score,
-                    scores={
-                        "image": file_data["scores"].get("image", 0.0),
-                        "keyword": file_data["scores"].get("keyword", 0.0),
-                    },
-                    keyword_matches=file_data["keyword_matches"],
-                )
-            )
-
-        typed_results.sort(key=lambda x: x.hybrid_score if x.hybrid_score is not None else 0.0, reverse=True)
-        typed_results = typed_results[: query.top_k or 10]
-
-        processing_time = time.time() - start_time
-        return ImageHybridSearchResponse(
-            success=True,
-            query=query.query,
-            results=typed_results,
-            total=len(typed_results),
-            total_files=len(typed_results),
-            total_images=sum(len(r.matched_images) for r in typed_results),
-            processing_time=processing_time,
-            weights={
-                "image_weight": normalized_vector_weight,
-                "keyword_weight": normalized_keyword_weight,
-            },
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"画像ハイブリッド検索エラー: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/search/image-text-keyword", response_model=ImageTextKeywordSearchResponse)
-async def search_image_text_keyword_documents(
-    query: ImageTextKeywordSearchQuery,
-    request: Request,
-):
-    """画像ベクトル + テキストキーワード検索（新名称エンドポイント）"""
-    return await search_documents_by_image_hybrid(query, request)
 
 
 @app.get("/object/{bucket}/{object_name:path}")
@@ -2850,6 +2350,88 @@ async def get_database_tables(
             total=0
         )
 
+
+@app.get("/database/system-tables/status")
+async def get_system_tables_status():
+    """システム必須テーブルの初期化状態を取得"""
+    try:
+        base_status = await asyncio.to_thread(system_table_status)
+        feature_status = (
+            await asyncio.to_thread(document_library_schema_status)
+            if base_status.get("ready")
+            else {
+                "ready": False,
+                "feature": "document_library",
+                "blocked_by": "base_schema",
+            }
+        )
+        return {
+            "success": True,
+            **base_status,
+            "document_library_ready": bool(feature_status.get("ready")),
+            "document_library": feature_status,
+        }
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503, detail="データベース接続を設定してください"
+        ) from error
+    except Exception as error:
+        logger.error(f"システムテーブル状態取得エラー: {error}")
+        raise HTTPException(
+            status_code=500, detail="システムテーブル状態の取得に失敗しました"
+        ) from error
+
+
+@app.post("/database/system-tables/initialize")
+async def initialize_system_tables(
+    recreate: bool = False, confirmation: str | None = None
+):
+    """システム必須テーブルを初期化、または明示確認後に再作成"""
+    if recreate and confirmation != MIGRATION_CONFIRMATION:
+        raise HTTPException(status_code=422, detail="再作成の確認が必要です")
+    try:
+        if recreate:
+            result = await asyncio.to_thread(
+                migrate_to_v4,
+                confirmation=confirmation or "",
+                backup_dir=project_root / "var" / "schema-backups",
+            )
+            pipeline_dispatcher.wake()
+        else:
+            result = await asyncio.to_thread(provision_system_tables, recreate=False)
+        feature_result = await asyncio.to_thread(apply_document_library_schema)
+        return {
+            "success": True,
+            "message": (
+                "システムテーブルを再作成しました"
+                if recreate
+                else "システムテーブルを初期化しました"
+            ),
+            **result,
+            "document_library_ready": bool(feature_result.get("ready")),
+            "document_library": feature_result,
+        }
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="一部または旧バージョンのテーブルがあります。再作成を実行してください",
+        ) from error
+    except RuntimeError as error:
+        status_code = 503 if "not configured" in str(error) else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail=(
+                "データベース接続を設定してください"
+                if status_code == 503
+                else "システムテーブルの初期化に失敗しました"
+            ),
+        ) from error
+    except Exception as error:
+        logger.error(f"システムテーブル初期化エラー: {error}")
+        raise HTTPException(
+            status_code=500, detail="システムテーブルの初期化に失敗しました"
+        ) from error
+
 @app.post("/database/tables/refresh-statistics")
 async def refresh_table_statistics():
     """テーブルの統計情報を更新"""
@@ -3077,7 +2659,7 @@ async def upload_wallet(file: UploadFile = File(...)):
         # 一時ファイル削除
         try:
             temp_file.unlink()
-        except:
+        except OSError:
             pass
         
         if not result["success"]:
@@ -3100,7 +2682,6 @@ async def upload_wallet(file: UploadFile = File(...)):
 # Autonomous Database管理
 # ========================================
 
-import oci
 
 def create_database_client():
     """Database Client を作成"""
@@ -3360,17 +2941,25 @@ class ChatMessage(BaseModel):
 async def copilot_chat_http(request: ChatMessage):
     """AI Assistant チャット（HTTP ストリーミング）"""
     copilot = get_copilot_service()
+    run_id = uuid.uuid4().hex
+    message_id = uuid.uuid4().hex
     
     async def generate():
-        async for chunk in copilot.chat_stream(
-            request.message,
-            request.context,
-            request.history,
-            request.images
-        ):
-            # SSE形式でストリーミング
-            yield f"data: {json.dumps({'content': chunk})}\n\n"
-        yield "data: {\"done\": true}\n\n"
+        try:
+            yield f"data: {json.dumps({'type': 'RUN_STARTED', 'runId': run_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'runId': run_id, 'messageId': message_id, 'role': 'assistant'}, ensure_ascii=False)}\n\n"
+            async for chunk in copilot.chat_stream(
+                request.message,
+                request.context,
+                request.history,
+                request.images
+            ):
+                yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'runId': run_id, 'messageId': message_id, 'delta': chunk, 'content': chunk}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'runId': run_id, 'messageId': message_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'RUN_FINISHED', 'runId': run_id, 'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as error:
+            yield f"data: {json.dumps({'type': 'RUN_ERROR', 'runId': run_id, 'message': str(error), 'content': f'エラー: {error}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'RUN_FINISHED', 'runId': run_id, 'done': True}, ensure_ascii=False)}\n\n"
     
     return StreamingResponse(
         generate(),
@@ -3383,10 +2972,6 @@ async def copilot_chat_http(request: ChatMessage):
 
 class DocumentDownloadRequest(BaseModel):
     """文書ダウンロードリクエスト"""
-    object_names: List[str]
-
-class DocumentConvertRequest(BaseModel):
-    """文書ページ画像化リクエスト"""
     object_names: List[str]
 
 @app.post("/oci/objects/download")
@@ -3451,101 +3036,6 @@ async def download_selected_objects(request: DocumentDownloadRequest, background
     except Exception as e:
         logger.error(f"ZIPダウンロードエラー: {e}")
         raise HTTPException(status_code=500, detail=f"ダウンロードエラー: {str(e)}")
-
-class VectorizeRequest(BaseModel):
-    """画像ベクトル化リクエスト"""
-    object_names: List[str]
-
-@app.post("/oci/objects/vectorize")
-async def vectorize_documents(request: VectorizeRequest):
-    """
-    選択されたファイルを画像ベクトル化してDBに保存（並列処理版）
-    - ファイルが未画像化の場合は自動的にページ画像化を実行してからベクトル化
-    - 既存の画像イメージやEmbeddingがある場合は削除してから再作成
-    - Server-Sent Events (SSE)でリアルタイム進捗状況を送信
-    """
-    object_names = request.object_names
-    
-    if not object_names:
-        raise HTTPException(status_code=400, detail="ベクトル化するファイルが指定されていません")
-    
-    job_id = str(uuid.uuid4())
-    logger.info(f"画像ベクトル化開始（並列）: {len(object_names)}件, job_id={job_id}")
-    
-    async def generate_progress():
-        """進捗状況をSSE形式でストリーミング"""
-        event_count = 0
-        try:
-            logger.info(f"ベクトル化SSEストリーム開始: job_id={job_id}")
-            async for event in parallel_processor.process_vectorization(
-                object_names=object_names,
-                oci_service=oci_service,
-                image_vectorizer=image_vectorizer,
-                job_id=job_id
-            ):
-                event_count += 1
-                # 心拍以外のイベントのみログ出力
-                if event.get('type') != 'heartbeat':
-                    logger.debug(f"SSEイベント送信 #{event_count}: type={event.get('type')}, job_id={job_id}")
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            logger.info(f"ベクトル化SSEストリーム完了: job_id={job_id}, total_events={event_count}")
-        except Exception as e:
-            logger.error(f"ベクトル化エラー: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-    
-    return StreamingResponse(
-        generate_progress(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "X-Job-ID": job_id
-        }
-    )
-
-@app.post("/oci/objects/convert-to-images")
-async def convert_documents_to_images(request: DocumentConvertRequest):
-    """
-    選択されたファイルをページ毎にPNG画像化して同名フォルダに保存（並列処理版）
-    Server-Sent Events (SSE)でリアルタイム進捗状況を送信
-    """
-    object_names = request.object_names
-    
-    if not object_names:
-        raise HTTPException(status_code=400, detail="変換するファイルが指定されていません")
-    
-    job_id = str(uuid.uuid4())
-    logger.info(f"ページ画像化開始（並列）: {len(object_names)}件, job_id={job_id}")
-    
-    async def generate_progress():
-        """進捗状況をSSE形式でストリーミング"""
-        event_count = 0
-        try:
-            logger.info(f"ページ画像化SSEストリーム開始: job_id={job_id}")
-            async for event in parallel_processor.process_image_conversion(
-                object_names=object_names,
-                oci_service=oci_service,
-                job_id=job_id
-            ):
-                event_count += 1
-                # 心拍以外のイベントのみログ出力
-                if event.get('type') != 'heartbeat':
-                    logger.debug(f"SSEイベント送信 #{event_count}: type={event.get('type')}, job_id={job_id}")
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            logger.info(f"ページ画像化SSEストリーム完了: job_id={job_id}, total_events={event_count}")
-        except Exception as e:
-            logger.error(f"ページ画像化エラー: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-    
-    return StreamingResponse(
-        generate_progress(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "X-Job-ID": job_id
-        }
-    )
 
 @app.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):

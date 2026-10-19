@@ -2,8 +2,6 @@
 // グローバル変数（app.jsからの移行）
 let dbTablesPage = 1;
 
-// デバッグ用：db.jsの関数が呼び出されたことを示すフラグ
-console.log('[DEBUG] db.jsモジュールがロードされました');
 let dbTablesTotalPages = 1;
 let selectedDbTables = [];
 let dbTablesBatchDeleteLoading = false;
@@ -17,7 +15,8 @@ let currentPageDbTables = [];
 
 import { appState } from '../state.js';
 import { apiCall as authApiCall } from './auth.js';
-import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showToast as utilsShowToast, formatDateTime as utilsFormatDateTime } from './utils.js';
+import { invalidateRetrievalSettings } from './retrieval-settings.js';
+import { showLoading as utilsShowLoading, hideLoading as utilsHideLoading, showToast as utilsShowToast, showConfirmModal as utilsShowConfirmModal, formatDateTime as utilsFormatDateTime } from './utils.js';
 
 /**
  * DB接続設定を読み込み、UIに反映する
@@ -253,7 +252,7 @@ export async function uploadWalletFile(file) {
     const formData = new FormData();
     formData.append('file', file);
     
-    // トークンを確認（localStorageから直接取得 - referenceプロジェクトに準拠）
+    // localStorageの認証トークンを付与する。
     const loginToken = localStorage.getItem('loginToken');
     const headers = {};
     if (loginToken) {
@@ -270,7 +269,7 @@ export async function uploadWalletFile(file) {
     utilsHideLoading();
     
     if (!response.ok) {
-      // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+      // 401応答時は認証状態を破棄する。
       if (response.status === 401) {
         const { forceLogout: authForceLogout } = await import('./auth.js');
         const requireLogin = appState.get('requireLogin');
@@ -381,23 +380,10 @@ export async function testDbConnection() {
           password = envData.password;
         }
         utilsHideLoading();
-      } catch (error) {
+      } catch {
         utilsHideLoading();
-        // console.warn('環境変数からパスワード取得エラー:', error);
       }
     }
-    
-    // デバッグログ
-    // デバッグ情報（本番環境ではコメントアウト）
-    // console.log('=== 接続テスト情報 ===');
-    // console.log('Username:', username);
-    // console.log('Password length:', password ? password.length : 0);
-    // console.log('DSN:', dsn);
-    // console.log('Password exists:', !!password);
-    // console.log('Password from env:', !passwordField.value && !!password);
-    // console.log('=====================');
-    
-    // 入力チェック
     if (!username || !password || !dsn) {
       utilsShowToast('ユーザー名、パスワード、DSNを入力してください', 'warning');
       return;
@@ -412,9 +398,6 @@ export async function testDbConnection() {
         dsn: dsn
       }
     }
-    
-    // console.log('Request body:', JSON.stringify({...requestBody, settings: {...requestBody.settings, password: '[HIDDEN]'}}));
-    
     // タイムアウト処理を追加（20秒）- バックエンド側も15秒でタイムアウトする
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('接続テストがタイムアウトしました（20秒）')), 20000)
@@ -432,9 +415,6 @@ export async function testDbConnection() {
     
     if (data.success) {
       utilsShowToast(data.message, 'success');
-      
-      // 接続成功時、DB情報を自動読み込み
-      // await loadDbInfo();
     } else {
       utilsShowToast(data.message, 'error');
     }
@@ -518,6 +498,114 @@ export async function loadDbInfo() {
   } catch (error) {
     utilsHideLoading();
     utilsShowToast(`データベース情報取得エラー: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * システム必須テーブルの状態を表示する
+ */
+function renderSystemTableStatus(data) {
+  const badge = document.getElementById('systemTablesStatusBadge');
+  const summary = document.getElementById('systemTablesSummary');
+  if (!badge || !summary) return;
+  const labels = {
+    ready: '初期化済み',
+    missing: '未初期化',
+    partial: '一部作成済み',
+    outdated: '再作成が必要',
+    unavailable: '確認できません'
+  };
+  const state = data.status || 'unavailable';
+  const ready = state === 'ready';
+  badge.textContent = labels[state] || labels.unavailable;
+  badge.style.background = ready ? '#dcfce7' : state === 'unavailable' ? '#e2e8f0' : '#fef3c7';
+  badge.style.color = ready ? '#166534' : state === 'unavailable' ? '#64748b' : '#92400e';
+  if (state === 'unavailable') {
+    summary.textContent = data.message || 'データベース接続後に状態を確認できます。';
+    return;
+  }
+  const count = `${data.existing_count || 0}/${data.total_count || 0}`;
+  summary.replaceChildren();
+  const message = document.createElement('div');
+  message.textContent = ready
+    ? `必要なシステムテーブルがすべて揃っています（${count}）。`
+    : `システムテーブルの準備が完了していません（${count}）。`;
+  summary.appendChild(message);
+  if (data.missing_tables?.length) {
+    const details = document.createElement('details');
+    details.style.marginTop = '8px';
+    const title = document.createElement('summary');
+    title.textContent = `不足テーブルを確認（${data.missing_tables.length}件）`;
+    const names = document.createElement('div');
+    names.style.marginTop = '6px';
+    names.style.fontFamily = 'monospace';
+    names.textContent = data.missing_tables.join(', ');
+    details.append(title, names);
+    summary.appendChild(details);
+  }
+}
+
+export async function loadSystemTableStatus({ notify = false } = {}) {
+  try {
+    const data = await authApiCall('/ai/api/database/system-tables/status');
+    renderSystemTableStatus(data);
+    return data;
+  } catch (error) {
+    renderSystemTableStatus({ status: 'unavailable', message: error.message });
+    if (notify) utilsShowToast(`状態の取得に失敗しました: ${error.message}`, 'error');
+    return null;
+  }
+}
+
+export async function refreshSystemTableStatus() {
+  try {
+    utilsShowLoading('システムテーブルの状態を確認中...');
+    await loadSystemTableStatus({ notify: true });
+  } finally {
+    utilsHideLoading();
+  }
+}
+
+export async function initializeSystemTables(recreate = false, button = null) {
+  if (recreate) {
+    const confirmed = await utilsShowConfirmModal(
+      '既存のシステムテーブルと保存データをすべて削除してから再作成します。この操作は元に戻せません。',
+      'システムテーブルを再作成',
+      { variant: 'danger', confirmText: '削除して再作成', cancelText: 'キャンセル' }
+    );
+    if (!confirmed) return;
+  }
+  const buttons = [
+    document.getElementById('initializeSystemTablesBtn'),
+    document.getElementById('recreateSystemTablesBtn')
+  ].filter(Boolean);
+  const originalHtml = button?.innerHTML;
+  try {
+    buttons.forEach(item => { item.disabled = true; });
+    if (button) {
+      button.setAttribute('aria-busy', 'true');
+      button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 処理中...';
+    }
+    utilsShowLoading(recreate ? 'システムテーブルを再作成中...' : 'システムテーブルを初期化中...');
+    const query = recreate ? '?recreate=true&confirmation=RECREATE' : '';
+    const data = await authApiCall(`/ai/api/database/system-tables/initialize${query}`, {
+      method: 'POST',
+      timeout: 180000
+    });
+    renderSystemTableStatus(data);
+    invalidateRetrievalSettings();
+    appState.set('dbTablesPage', 1);
+    utilsShowToast(data.message, 'success');
+    await loadDbTables();
+  } catch (error) {
+    utilsShowToast(`システムテーブル処理に失敗しました: ${error.message}`, 'error');
+  } finally {
+    utilsHideLoading();
+    buttons.forEach(item => { item.disabled = false; });
+    if (button) {
+      button.removeAttribute('aria-busy');
+      button.innerHTML = originalHtml;
+    }
   }
 }
 
@@ -1115,16 +1203,6 @@ export function toggleSelectAllTableData(checked) {
   }
 }
 
-// // グローバルスコープに公開（HTMLインラインイベントハンドラから呼び出せるように）
-// window.toggleTableDataRowSelection = toggleTableDataRowSelection;
-// window.toggleSelectAllTableData = toggleSelectAllTableData;
-// window.selectAllTableData = selectAllTableData;
-// window.clearAllTableData = clearAllTableData;
-// window.deleteSelectedTableData = deleteSelectedTableData;
-// window.refreshTableData = refreshTableData;
-// window.handleTableDataPrevPage = handleTableDataPrevPage;
-// window.handleTableDataNextPage = handleTableDataNextPage;
-// window.handleTableDataJumpPage = handleTableDataJumpPage;
 
 export function handleDbTablesPrevPage() {
   const currentPage = appState.get('dbTablesPage') || 1;
@@ -1275,7 +1353,7 @@ export async function deleteSelectedDbTables() {
   }
   
   const count = selectedDbTables.length;
-  const confirmed = await showConfirmModal(
+  const confirmed = await utilsShowConfirmModal(
     `選択された${count}件のテーブルを削除しますか？\n\nこの操作は元に戻せません。`,
     'テーブル削除の確認',
     { variant: 'danger', confirmText: '削除' }

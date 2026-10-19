@@ -11,36 +11,37 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../" && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="/root/.local/bin:${PATH}"
+# Homebrew が通常の PATH にない場合にも対応する（Apple Silicon / Intel）。
+if [ "$(uname -s)" = "Darwin" ]; then
+  for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "${brew_bin}/brew" ]; then
+      PATH="${brew_bin}:$PATH"
+      break
+    fi
+  done
 
-# .envファイルから環境変数を安全に読み込み
-if [ -f "$ROOT_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ROOT_DIR/.env"
-  set +a
+  # Homebrew Cask 版 LibreOffice の CLI を文書変換処理から利用できるようにする。
+  if [ -d "/Applications/LibreOffice.app/Contents/MacOS" ]; then
+    PATH="/Applications/LibreOffice.app/Contents/MacOS:$PATH"
+  fi
+  export PATH
 fi
 
-# backend/.env が存在する場合はルート .env より優先して上書き
-if [ -f "$ROOT_DIR/backend/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$ROOT_DIR/backend/.env"
-  set +a
+# .envはpython-dotenvがアプリ側で読み込む。
+# シェルはexec前に必要なORACLE_CLIENT_LIB_DIRのみ抽出する。
+# 全体をsourceすると引用符や空白を含む値を誤解釈するため、必要な1変数だけ読む。
+if [ -f "$ROOT_DIR/.env" ]; then
+  ORACLE_CLIENT_LIB_DIR="${ORACLE_CLIENT_LIB_DIR:-$(awk -F= '$1 == "ORACLE_CLIENT_LIB_DIR" {sub(/^[^=]*=/, ""); value=$0} END {print value}' "$ROOT_DIR/.env")}"
+  export ORACLE_CLIENT_LIB_DIR
 fi
 
 # Oracle Client環境変数を設定
-# 優先順位: 環境変数 TNS_ADMIN > /u01/aipoc/props/wallet > ORACLE_CLIENT_LIB_DIR/network/admin
-if [ -z "${TNS_ADMIN:-}" ]; then
-  # TNS_ADMINが未設定の場合
-  if [ -d "/u01/aipoc/props/wallet" ]; then
-    export TNS_ADMIN="/u01/aipoc/props/wallet"
-  elif [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
-    export TNS_ADMIN="${ORACLE_CLIENT_LIB_DIR}/network/admin"
-  fi
+# 優先順位: 環境変数 TNS_ADMIN > ORACLE_CLIENT_LIB_DIR/network/admin
+if [ -z "${TNS_ADMIN:-}" ] && [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
+  export TNS_ADMIN="${ORACLE_CLIENT_LIB_DIR}/network/admin"
 fi
 
-if [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
+if [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ] && [ "$(uname -s)" != "Darwin" ]; then
   export LD_LIBRARY_PATH="${ORACLE_CLIENT_LIB_DIR}:${LD_LIBRARY_PATH:-}"
 fi
 
@@ -50,16 +51,11 @@ if [ -n "${TNS_ADMIN:-}" ]; then
   echo "  TNS_ADMIN: ${TNS_ADMIN}"
 fi
 
-PORT="${BACKEND_PORT:-${API_PORT:-8081}}"
+PORT="${BACKEND_PORT:-8081}"
 
 echo "[バックエンド] FastAPI dev serverをポート ${PORT} で起動中..."
 
-UV_BIN="$(command -v uv || true)"
-if [ -z "$UV_BIN" ] && [ -x "/root/.local/bin/uv" ]; then
-  UV_BIN="/root/.local/bin/uv"
-fi
-
-if [ -z "$UV_BIN" ]; then
+if ! command -v uv >/dev/null 2>&1; then
   echo "[バックエンド] ERROR: 'uv' が見つかりません。" 1>&2
   echo "         uvをインストール:  curl -LsSf https://astral.sh/uv/install.sh | sh" 1>&2
   exit 1
@@ -81,7 +77,7 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 
 echo "[バックエンド] Python依存関係をuvで同期中 (backend/)"
-"$UV_BIN" sync --directory backend
+uv sync --directory backend --locked
 
 echo "[バックエンド] uvicorn app.main:app を自動リロードで起動 (0.0.0.0:${PORT})"
-exec "$UV_BIN" run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"
+exec uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"

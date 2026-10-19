@@ -1,168 +1,88 @@
-# No.1 Semantic Document Search
+# 資料見つかるくん — Semantic Document Search
 
-## Deploy
+Oracle AI DatabaseとOCIを使う、文書管理・マルチモーダル検索アプリです。
+文書を登録・分類し、自然言語、画像、AIが抽出したタグから関連資料を探せます。
 
-- v1.13.1: 大阪リージョンのみをサポートしています。（デフォルト：大阪リージョン）
+## 主な機能
 
-  Click [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/yushibats/no.1-semantic-doc-search/releases/download/v1.13.1/v1.13.1.zip)
+- 文書の登録、一覧、メタデータ・分類候補の確認、ダウンロード。
+- 自然言語・画像・タグによる検索と、関連文書の表示。
+- OCR / MinerU / VLMによる抽出、ベクトル化、処理履歴・進捗・再試行。
+- VLM抽出プロファイル、検索設定、DB・OCI接続の管理。
+- AIアシスタントとDify連携（任意）。
 
+同梱の分類ルールとVLMプロファイルは、日本語の住宅施工写真・提案図面を主な対象にしています。
+別分野で使う場合は、設定画面から分類ルール、タグ、抽出プロファイルを用途に合わせて変更してください。
 
-## ネットワーク設定
-
-デプロイ後、以下のネットワーク設定を行ってください：
-
-1. **Computeインスタンスのセキュリティリスト**: インバウンドルールでポート80（HTTP）を開放してください
-2. **ADBがPrivate Endpointの場合**: ADBのセキュリティリストにComputeインスタンスのプライベートIPを追加し、ポート1522（Oracle Net）のアクセスを許可してください
-
-## ライセンス
-
-本プロジェクトは **MIT** で提供されています。  
-詳細は `LICENSE.txt` を参照してください。
-
-## 利用ライブラリのライセンス一覧（主要な直接依存）
-
-以下は、ローカル依存定義（`frontend/package-lock.json` / `backend/uv.lock`）を基準にし、公式公開情報（PyPI / npm / 公式サイト）で再確認した結果です。
-
-### Frontend
-
-| ライブラリ | バージョン | ライセンス |
-|---|---:|---|
-| @fortawesome/fontawesome-free | 6.5.1 | CC-BY-4.0 AND OFL-1.1 AND MIT |
-| autoprefixer | 10.4.23 | MIT |
-| jsdom | 28.0.0 | MIT |
-| marked | 17.0.1 | MIT |
-| postcss | 8.5.6 | MIT |
-| tailwindcss | 3.4.19 | MIT |
-| vite | 5.4.21 | MIT |
-
-### Backend
-
-| ライブラリ | バージョン | ライセンス |
-|---|---:|---|
-| fastapi | 0.128.0 | MIT |
-| uvicorn | 0.40.0 | BSD-3-Clause |
-| numpy | 2.4.1 | BSD-3-Clause（配布物に追加ライセンス表記あり） |
-| pandas | 2.3.3 | BSD-3-Clause |
-| python-multipart | 0.0.21 | Apache-2.0 |
-| python-dotenv | 1.2.1 | BSD-3-Clause |
-| oci | 2.165.1 | UPL-1.0 OR Apache-2.0 |
-| pydantic | 2.12.5 | MIT |
-| pypdf2 | 3.0.1 | BSD License |
-| python-pptx | 1.0.2 | MIT |
-| python-docx | 1.2.0 | MIT |
-| pillow | 12.1.0 | MIT-CMU |
-| oci-openai | 1.0.0 | UPL-1.0 |
-| oracledb | 3.4.1 | Apache-2.0 OR UPL-1.0 |
-| pdf2image | 1.17.0 | MIT |
-| markdown2 | 2.5.4 | MIT |
-| fpdf2 | 2.8.5 | LGPL-3.0-only |
-
-### 注意事項
-
-- `fpdf2` は `LGPL-3.0-only` です。動的インポートで使用する場合、LGPLは伝播しません。再配布時は以下のライセンス文書を同梱してください：
-  - GNU Lesser General Public License v3.0: <https://www.gnu.org/licenses/lgpl-3.0.txt>
-  - fpdf2 作者: David Ansermino (@davidanson) - https://github.com/py-pdf/fpdf2
-- `@fortawesome/fontawesome-free` は複合ライセンスです（単一MITではありません）。CC BY 4.0 に基づき、以下の帰属表示が必要です：
-  ```
-  Font Awesome Free by Fonticons, Inc. - https://fontawesome.com
-  License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License)
-  ```
-
-### 参考リンク（公式情報）
-
-- Font Awesome Free License: <https://fontawesome.com/license/free>
-- npm: `autoprefixer` <https://www.npmjs.com/package/autoprefixer>
-- npm: `jsdom` <https://www.npmjs.com/package/jsdom>
-- npm: `marked` <https://www.npmjs.com/package/marked>
-- npm: `postcss` <https://www.npmjs.com/package/postcss>
-- npm: `tailwindcss` <https://www.npmjs.com/package/tailwindcss>
-- npm: `vite` <https://www.npmjs.com/package/vite>
-- PyPI: `fastapi` <https://pypi.org/project/fastapi/0.128.0/>
-- PyPI: `uvicorn` <https://pypi.org/project/uvicorn/0.40.0/>
-- PyPI: `numpy` <https://pypi.org/project/numpy/2.4.1/>
-- PyPI: `pandas` <https://pypi.org/project/pandas/2.3.3/>
-- PyPI: `python-multipart` <https://pypi.org/project/python-multipart/0.0.21/>
-- PyPI: `python-dotenv` <https://pypi.org/project/python-dotenv/1.2.1/>
-- PyPI: `oci` <https://pypi.org/project/oci/2.165.1/>
-- PyPI: `pydantic` <https://pypi.org/project/pydantic/2.12.5/>
-- PyPI: `PyPDF2` <https://pypi.org/project/PyPDF2/3.0.1/>
-- PyPI: `python-pptx` <https://pypi.org/project/python-pptx/1.0.2/>
-- PyPI: `python-docx` <https://pypi.org/project/python-docx/1.2.0/>
-- PyPI: `Pillow` <https://pypi.org/project/pillow/12.1.0/>
-- PyPI: `oci-openai` <https://pypi.org/project/oci-openai/1.0.0/>
-- PyPI: `oracledb` <https://pypi.org/project/oracledb/3.4.1/>
-- PyPI: `pdf2image` <https://pypi.org/project/pdf2image/1.17.0/>
-- PyPI: `markdown2` <https://pypi.org/project/markdown2/2.5.4/>
-- PyPI: `fpdf2` <https://pypi.org/project/fpdf2/2.8.5/>
-
-## Text RAG拡張（PDF/DOCX向け）
-
-既存の画像ベース検索機能を維持したまま、テキスト抽出可能なPDF/DOCX向けのText RAG機能を追加しました。
-
-- スキャンPDF（テキスト抽出不可）は対象外
-- 画像検索とテキスト検索は独立実行
-- `hybrid` 検索で text vector + keyword を統合（将来 image score を混ぜる拡張ポイントあり）
-- 既存の OCI / ADB / Object Storage 構成を流用
-- embedding生成は既存 `image_vectorizer.generate_text_embedding()` を利用
-
-### 変更ファイル一覧
-
-- `backend/app/services/text_rag_processor.py`（新規）
-- `backend/app/services/database_service.py`
-- `backend/app/models/search.py`
-- `backend/app/main.py`
-- `backend/tests/test_text_rag_processor.py`（新規）
-- `.env.example`
-
-### 追加エンドポイント
-
-- `POST /documents/index-text`
-  - PDF/DOCXをテキスト抽出→段落ベース+max_charsでチャンク化→TEXT_CHUNKSへ索引化
-- `POST /search/text`
-  - TEXT_CHUNKSへのベクトル検索
-- `POST /search/hybrid`
-  - text vector score + keyword score の融合検索
-
-### 追加DDL（TEXT_CHUNKS）
-
-```sql
-CREATE TABLE TEXT_CHUNKS (
-    CHUNK_ID NUMBER GENERATED BY DEFAULT AS IDENTITY
-        MINVALUE 1
-        MAXVALUE 9999999999999999999999999999
-        INCREMENT BY 1
-        START WITH 1
-        CACHE 20
-        NOORDER NOCYCLE NOKEEP NOSCALE,
-    BUCKET VARCHAR2(128 BYTE) COLLATE USING_NLS_COMP,
-    OBJECT_NAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
-    ORIGINAL_FILENAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
-    CHUNK_INDEX NUMBER,
-    CHUNK_TEXT CLOB,
-    CHAR_COUNT NUMBER,
-    EMBEDDING VECTOR(1536, FLOAT32),
-    CREATED_AT TIMESTAMP(6) DEFAULT SYSTIMESTAMP,
-    CONSTRAINT PK_TEXT_CHUNKS PRIMARY KEY (CHUNK_ID)
-) DEFAULT COLLATION USING_NLS_COMP;
-
-CREATE UNIQUE INDEX UX_TEXT_CHUNKS_FILE_CHUNK
-ON TEXT_CHUNKS (BUCKET, OBJECT_NAME, CHUNK_INDEX);
+```mermaid
+flowchart LR
+  Browser[ブラウザー /ai/] --> Nginx[Nginx]
+  Nginx --> UI[Vite フロントエンド]
+  Nginx --> API[FastAPI]
+  API --> DB[Oracle AI Database / Vector / Oracle Text]
+  API --> Storage[OCI Object Storage]
+  API --> AI[OCI Generative AI / Enterprise AI]
+  API --> OCR[OCR・MinerU API 任意]
 ```
 
-### 追加環境変数
+## OCIへデプロイする
 
-`.env` / `.env.example` に以下を追加:
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/yushibats/no.1-semantic-doc-search-yushibats/releases/latest/download/semantic-doc-search-stack.zip)
 
-- `ENABLE_TEXT_RAG=false`
-  - Text RAG機能の有効化フラグ
-- `SEARCH_MODE=image`
-  - `image | text | hybrid | all`
+1. [OCIへの導入手順](docs/deployment.md)で必要な権限・ネットワーク・サービスを確認します。
+2. 上のボタンからOCIへサインインし、デプロイ先リージョンとコンパートメントを選びます。
+3. 画面に表示される変数を設定し、Planを確認してからApplyします。
+4. DBとOCIを設定し、[サンプル文書](docs/sample-document.md)で登録・検索を確認します。
 
-### 移行手順
+ボタンは、GitHubで公開されている最新Releaseの`semantic-doc-search-stack.zip`を読み込みます。
+ドラフトまたはプレリリースだけが存在する状態では利用できません。手動アップロードと
+パッケージ作成の方法は[OCIへの導入手順](docs/deployment.md)に記載しています。
+作成するCompute・ADB・ストレージ・AI利用には料金が発生します。
+接続情報・文書・DBデータは利用者ごとに用意します。
 
-1. `.env` に新規環境変数を追加（上記参照）
-2. アプリ再起動
-3. 初回 `POST /documents/index-text` 実行時に `TEXT_CHUNKS` テーブルを自動作成
-4. 必要に応じて既存PDF/DOCXを再索引化
-5. `POST /search/text` / `POST /search/hybrid` で検索確認
+## 開発する
 
+必要なもの: Python 3.13、uv、Node.js 20.19以上、npm。
+DB・OCIへの接続と、文書変換に必要なOS依存関係については[開発手順](docs/development.md)を参照してください。
+
+```bash
+cp .env.example .env
+uv sync --directory backend --locked --python 3.13 --group dev
+npm ci --prefix frontend
+```
+
+`.env`を設定後、別々のターミナルで起動します。
+
+```bash
+bash scripts/start-backend.sh
+```
+
+```bash
+bash scripts/start-frontend.sh
+```
+
+ブラウザーで`http://localhost:5175/ai/`を開きます。
+
+## ドキュメント
+
+| 目的 | 説明 |
+|---|---|
+| OCIに新規導入する | [導入手順・404の切り分け](docs/deployment.md) |
+| DB、AI、OCRを設定する | [設定項目](docs/configuration.md) |
+| 開発・検証する | [ローカル開発とテスト](docs/development.md) |
+| 更新・共有・削除する | [運用とリリース](docs/operations.md) |
+| 動作確認用の文書を使う | [架空のサンプル文書](docs/sample-document.md) |
+
+## 変更とリリース
+
+PRでバックエンドテスト、UIテスト、ビルド、Terraform、配布スクリプトを検証します。
+`main`へのマージ後に`v*`タグをpushすると、検証済みコミットから配布物を生成し、
+GitHubのドラフトリリースへ添付します。導入確認後に公開してください。
+配布ZIPには取得元のコミットSHAとファイルハッシュを記録します。
+
+## データとライセンス
+
+このリポジトリに実際の`.env`、認証キー、Wallet、顧客文書、DBダンプ、バックアップは含めません。
+サーバー上で設定したモデル・検索プロファイル・登録文書は別途管理します。
+本体のライセンスは[MIT](LICENSE.txt)です。依存ライブラリと同梱素材については
+[第三者のライセンス・帰属表示](THIRD_PARTY_NOTICES.md)を参照してください。

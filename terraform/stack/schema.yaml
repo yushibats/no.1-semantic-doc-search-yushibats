@@ -12,6 +12,8 @@ variableGroups:
     visible: false
     variables:
       - region
+      - source_repository_url
+      - source_revision
       - instance_boot_volume_size
       - instance_boot_volume_vpus
       - instance_flex_shape_memory
@@ -38,8 +40,6 @@ variableGroups:
       - oci_bucket_name
       - show_ai_assistant
       - show_search_tab
-      - enable_text_rag
-      - search_mode
       - enable_dify
 
   - title: Dify Configuration
@@ -60,14 +60,10 @@ variables:
 
   deploy_region:
     title: "Deploy Region"
-    type: enum
+    type: oci:identity:region:name
     required: true
     visible: true
-    description: "Select the target OCI region for this deployment"
-    enum:
-      - "ap-osaka-1"
-      - "ap-tokyo-1"
-    default: "ap-osaka-1"
+    description: "Select a subscribed OCI region for this deployment"
 
   compartment_ocid:
     type: oci:identity:compartment:id
@@ -194,27 +190,6 @@ variables:
     description: "Control Search tab visibility (true: show, false: hide)"
     default: true
 
-  enable_text_rag:
-    type: boolean
-    required: true
-    visible: true
-    title: "Enable Text RAG"
-    description: "Enable text-based RAG indexing/search features"
-    default: false
-
-  search_mode:
-    type: enum
-    required: true
-    visible: true
-    title: "Search Mode"
-    description: "Select search mode exposed by the application"
-    enum:
-      - "image"
-      - "text"
-      - "hybrid"
-      - "all"
-    default: "image"
-
   enable_dify:
     type: boolean
     required: true
@@ -230,7 +205,7 @@ variables:
     required: true
     visible: ${enable_dify}
     confirmation: false
-    default: "secret"
+    default: ""
 
   dify_branch:
     type: string
@@ -255,7 +230,7 @@ variables:
     title: "OCI Access Key"
     description: "OCI Object Storage Access Key (S3 compatibility)"
     confirmation: false
-    default: "oci_access_key"
+    default: ""
 
   oci_secret_key:
     type: password
@@ -264,19 +239,25 @@ variables:
     title: "OCI Secret Key"
     description: "OCI Object Storage Secret Key (S3 compatibility)"
     confirmation: false
-    default: "oci_secret_key"
+    default: ""
+
+  source_repository_url:
+    type: string
+    visible: false
+  source_revision:
+    type: string
+    visible: false
 
   instance_image_source_id:
-    type: enum
+    type: oci:core:image:id
     required: true
     visible: true
-    title: "Operating System Image"
-    description: "Select the OS image according to your region"
-    enum:
-      - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
-      - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
-      - "ocid1.image.oc1.us-chicago-1.aaaaaaaal25tbfrlwhh27tzgiatqr3oq5y3qzz7wgpezjouvjk2cdfdr4mnq"
-    default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
+    title: "Ubuntu x86_64 Image"
+    description: "Select an Ubuntu x86_64 platform image in the deployment region. The installer uses apt."
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+      operatingSystem: "Canonical Ubuntu"
+      shape: ${instance_shape}
 
   instance_shape:
     type: enum

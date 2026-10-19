@@ -20,7 +20,7 @@ resource "oci_core_instance" "generated_oci_core_instance" {
     are_legacy_imds_endpoints_disabled = "false"
   }
   metadata = {
-    "user_data"           = data.template_cloudinit_config.cloud_init.rendered
+    "user_data"           = data.cloudinit_config.cloud_init.rendered
     "ssh_authorized_keys" = var.ssh_authorized_keys
   }
   platform_config {

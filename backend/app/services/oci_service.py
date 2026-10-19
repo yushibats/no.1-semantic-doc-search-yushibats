@@ -12,6 +12,7 @@ Object Storageへのファイルアップロード、ダウンロード、およ
 """
 import base64
 import configparser
+import io
 import logging
 import os
 import random
@@ -20,9 +21,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv, load_dotenv, set_key
 import oci
-from app.models.oci import OCISettings
+from app.models.oci import EnterpriseAISettings, OCISettings
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,9 @@ elif find_dotenv():
     load_dotenv(find_dotenv())
 
 # 環境変数から設定ファイルのパスを取得、デフォルトは ~/.oci/config
-OCI_CONFIG_FILE = os.environ.get("OCI_CONFIG_FILE", os.path.expanduser("~/.oci/config"))
+OCI_CONFIG_FILE = os.environ.get("OCI_CONFIG_FILE") or os.path.expanduser("~/.oci/config")
 # キーファイルのパスは設定ファイルと同じディレクトリ内の oci_api_key.pem をデフォルトとする
-OCI_KEY_FILE = os.environ.get("OCI_KEY_FILE", os.path.join(os.path.dirname(OCI_CONFIG_FILE), "oci_api_key.pem"))
+OCI_KEY_FILE = os.environ.get("OCI_KEY_FILE") or os.path.join(os.path.dirname(OCI_CONFIG_FILE), "oci_api_key.pem")
 
 # レート制限対応のリトライ設定
 OCI_API_MAX_RETRIES = int(os.environ.get("OCI_API_MAX_RETRIES", "5"))
@@ -69,6 +70,7 @@ class OCIService:
     def __init__(self):
         self.config_file = OCI_CONFIG_FILE
         self.key_file = OCI_KEY_FILE
+        self.env_file = Path(__file__).parents[3] / ".env"
         self._oci_config = None
         self._object_storage_client = None
     
@@ -249,6 +251,7 @@ class OCIService:
             
             # Configファイルを保存（Regionを含む）
             config = configparser.ConfigParser()
+            config.read(self.config_file)
             config['DEFAULT'] = {
                 'user': settings.user_ocid,
                 'fingerprint': settings.fingerprint,
@@ -273,6 +276,27 @@ class OCIService:
         except Exception as e:
             logger.error(f"設定ファイルの保存エラー: {e}")
             return False
+
+    def get_enterprise_ai_settings(self) -> EnterpriseAISettings:
+        """.envからOCI Generative AI OpenAI互換設定を取得する。"""
+        values = dotenv_values(self.env_file)
+        return EnterpriseAISettings(
+            base_url=values.get("OCI_ENTERPRISE_AI_BASE_URL") or "",
+            project=values.get("OCI_ENTERPRISE_AI_PROJECT") or None,
+            api_key=values.get("OCI_ENTERPRISE_AI_API_KEY") or "",
+            model=values.get("OCI_ENTERPRISE_AI_MODEL") or "",
+        )
+
+    def save_enterprise_ai_settings(self, settings: EnterpriseAISettings) -> None:
+        """OCI Generative AI OpenAI互換設定を.envへ保存する。"""
+        self.env_file.touch(exist_ok=True)
+        for key, value in {
+            "OCI_ENTERPRISE_AI_BASE_URL": settings.base_url.rstrip("/"),
+            "OCI_ENTERPRISE_AI_PROJECT": settings.project or "",
+            "OCI_ENTERPRISE_AI_API_KEY": settings.api_key,
+            "OCI_ENTERPRISE_AI_MODEL": settings.model,
+        }.items():
+            set_key(self.env_file, key, value)
 
     def test_connection(self, settings: Optional[OCISettings] = None) -> Dict[str, Any]:
         """
@@ -351,6 +375,10 @@ class OCIService:
         if self._object_storage_client is None:
             config = self.get_oci_config()
             if config:
+                timeout = (
+                    float(os.environ.get("OBJECT_STORAGE_CONNECT_TIMEOUT_SECONDS", "10")),
+                    float(os.environ.get("OBJECT_STORAGE_TRANSFER_TIMEOUT_SECONDS", "300")),
+                )
                 # Object Storageは OCI_REGION_DEPLOY を使用
                 deploy_region = os.environ.get("OCI_REGION_DEPLOY")
                 if deploy_region:
@@ -358,11 +386,15 @@ class OCIService:
                     storage_config = config.copy()
                     storage_config["region"] = deploy_region
                     logger.info(f"Object Storage ClientをOCI_REGION_DEPLOYで作成: {deploy_region}")
-                    self._object_storage_client = oci.object_storage.ObjectStorageClient(storage_config)
+                    self._object_storage_client = oci.object_storage.ObjectStorageClient(
+                        storage_config, timeout=timeout
+                    )
                 else:
                     # OCI_REGION_DEPLOYがない場合はデフォルトregionを使用
                     logger.warning("OCI_REGION_DEPLOYが設定されていません。OCI_REGIONを使用します")
-                    self._object_storage_client = oci.object_storage.ObjectStorageClient(config)
+                    self._object_storage_client = oci.object_storage.ObjectStorageClient(
+                        config, timeout=timeout
+                    )
         return self._object_storage_client
     
     def get_namespace(self) -> Dict[str, Any]:
@@ -648,11 +680,64 @@ class OCIService:
             
             if content_type:
                 put_object_kwargs["content_type"] = content_type
-            
-            self._retry_api_call(
-                client.put_object,
-                **put_object_kwargs
+
+            multipart_threshold = int(
+                os.environ.get(
+                    "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", str(10 * 1024 * 1024)
+                )
             )
+            content_length = file_size
+            if content_length is None and isinstance(file_content, (bytes, bytearray)):
+                content_length = len(file_content)
+            if content_length is not None and content_length >= multipart_threshold:
+                if isinstance(file_content, (bytes, bytearray)):
+                    payload = bytes(file_content)
+                elif hasattr(file_content, "getvalue"):
+                    payload = file_content.getvalue()
+                else:
+                    original_position = (
+                        file_content.tell() if hasattr(file_content, "tell") else None
+                    )
+                    payload = file_content.read()
+                    if original_position is not None and hasattr(file_content, "seek"):
+                        file_content.seek(original_position)
+                manager = oci.object_storage.UploadManager(
+                    client,
+                    allow_parallel_uploads=True,
+                    parallel_process_count=max(
+                        1, int(os.environ.get("OBJECT_STORAGE_MULTIPART_WORKERS", "3"))
+                    ),
+                )
+                multipart_kwargs = {
+                    "metadata": opc_meta,
+                    "part_size": max(
+                        10 * 1024 * 1024,
+                        int(
+                            os.environ.get(
+                                "OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES",
+                                str(10 * 1024 * 1024),
+                            )
+                        ),
+                    ),
+                }
+                if content_type:
+                    multipart_kwargs["content_type"] = content_type
+
+                def upload_multipart() -> Any:
+                    return manager.upload_stream(
+                        namespace,
+                        bucket_name,
+                        object_name,
+                        io.BytesIO(payload),
+                        **multipart_kwargs,
+                    )
+
+                self._retry_api_call(upload_multipart)
+            else:
+                self._retry_api_call(
+                    client.put_object,
+                    **put_object_kwargs,
+                )
             
             logger.info(f"Object Storageアップロード成功: {object_name} (原始ファイル名: {original_filename})")
             return True
@@ -838,7 +923,7 @@ class OCIService:
                                                 failed_objects.append(img_obj["name"])
                                 else:
                                     logger.info(f"画像ファイルなし: {image_folder_name}")
-                        except Exception as folder_check_e:
+                        except Exception:
                             # フォルダが存在しない場合はエラーを無視（画像化されていないファイル）
                             logger.debug(f"画像フォルダなし: {image_folder_name}")
                         

@@ -475,7 +475,7 @@ if [ -d "$PROJECT_DIR" ]; then
         COMPARTMENT_ID=""
     fi
 
-    cp .env.example .env
+    install -m 0600 .env.example .env
     
     if [ -n "$DB_CONNECTION_STRING" ]; then
         sed -i "s|ORACLE_26AI_CONNECTION_STRING=.*|ORACLE_26AI_CONNECTION_STRING=$DB_CONNECTION_STRING|g" .env
@@ -527,8 +527,8 @@ if [ -d "$PROJECT_DIR" ]; then
     fi
     
     # Set OCI Namespace (get from OCI API or properties)
-    if [ -f "${INSTALL_DIR}/props/oci_namespace.txt" ]; then
-        OCI_NAMESPACE=$(cat "${INSTALL_DIR}/props/oci_namespace.txt")
+    if [ -f "${INSTALL_DIR}/props/bucket_namespace.txt" ]; then
+        OCI_NAMESPACE=$(cat "${INSTALL_DIR}/props/bucket_namespace.txt")
         sed -i "s|OCI_NAMESPACE=.*|OCI_NAMESPACE=${OCI_NAMESPACE}|g" .env
     fi
     
@@ -589,32 +589,6 @@ if [ -d "$PROJECT_DIR" ]; then
         fi
     fi
 
-    # Set ENABLE_TEXT_RAG (if available)
-    if [ -f "${INSTALL_DIR}/props/enable_text_rag.txt" ]; then
-        ENABLE_TEXT_RAG=$(cat "${INSTALL_DIR}/props/enable_text_rag.txt" | xargs)
-        if [ -n "$ENABLE_TEXT_RAG" ]; then
-            if grep -q "^ENABLE_TEXT_RAG=" .env; then
-                sed -i "s|^ENABLE_TEXT_RAG=.*|ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}|g" .env
-            else
-                echo "ENABLE_TEXT_RAG=${ENABLE_TEXT_RAG}" >> .env
-            fi
-            echo "Text RAG有効化: ${ENABLE_TEXT_RAG}"
-        fi
-    fi
-
-    # Set SEARCH_MODE (if available)
-    if [ -f "${INSTALL_DIR}/props/search_mode.txt" ]; then
-        SEARCH_MODE=$(cat "${INSTALL_DIR}/props/search_mode.txt" | xargs)
-        if [ -n "$SEARCH_MODE" ]; then
-            if grep -q "^SEARCH_MODE=" .env; then
-                sed -i "s|^SEARCH_MODE=.*|SEARCH_MODE=${SEARCH_MODE}|g" .env
-            else
-                echo "SEARCH_MODE=${SEARCH_MODE}" >> .env
-            fi
-            echo "検索モード: ${SEARCH_MODE}"
-        fi
-    fi
-
     # Setup backend with Python 3.13
     echo "Python 3.13でバックエンドをセットアップ中..."
     cd "${PROJECT_DIR}"
@@ -625,7 +599,7 @@ if [ -d "$PROJECT_DIR" ]; then
     # Create venv and sync dependencies
     echo "依存関係を同期中..."
     uv venv --python 3.13 backend/.venv
-    uv sync --directory backend
+    uv sync --directory backend --locked
     
     echo "バックエンドのセットアップが完了しました。"
     
@@ -634,14 +608,12 @@ if [ -d "$PROJECT_DIR" ]; then
     cd "${PROJECT_DIR}/frontend"
     
     rm -f .env.development
-    # nginx が /ai/api を backend に中継するため、本番UIは相対パスを使用する
     echo "VITE_API_BASE=" > .env.production
     echo "VITE_API_BASE=" > .env
-    echo "FRONTEND_PORT=5175" >> .env
     
     # Ensure npm install succeeds
-    echo "npm install を実行中..."
-    retry_command npm install --no-audit --no-fund
+    echo "npm ci を実行中..."
+    retry_command npm ci --no-audit --no-fund
     
     echo "本番用フロントエンドをビルド中..."
     npm run build
@@ -672,6 +644,8 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
+        proxy_buffering off;
+        proxy_cache off;
     }
 
     # /ai/api を /ai/api/ にリダイレクト
@@ -785,6 +759,8 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
+        proxy_buffering off;
+        proxy_cache off;
     }
 
     # /ai/api を /ai/api/ にリダイレクト
@@ -903,51 +879,15 @@ NGINX_EOF
     fi
 fi
 
-# Create startup script
+# Use the same dotenv-aware launcher as the running application.
 cat > "${INSTALL_DIR}/start_semantic_doc_search_services.sh" << 'EOF'
-#!/bin/bash
-if [ -f /root/.bashrc ]; then
-  source /root/.bashrc
-fi
-
-export PATH="/root/.local/bin:$PATH"
-cd /u01/aipoc/no.1-semantic-doc-search
-
-if [ -f .env ]; then
-  set -a
-  source .env
-  set +a
-fi
-
-# Set TNS_ADMIN for Oracle Wallet
-export TNS_ADMIN="${ORACLE_CLIENT_LIB_DIR}/network/admin"
-
-echo "セマンティック文書検索バックエンドサービスを起動中..."
-# 環境変数からAPI_HOSTとAPI_PORTを読み取る（デフォルト値付き）
-API_HOST=${API_HOST:-0.0.0.0}
-API_PORT=${API_PORT:-8081}
-FRONTEND_PORT=${FRONTEND_PORT:-5175}
-UV_BIN="$(command -v uv || true)"
-if [ -z "$UV_BIN" ] && [ -x /root/.local/bin/uv ]; then
-  UV_BIN="/root/.local/bin/uv"
-fi
-
-if [ -z "$UV_BIN" ]; then
-  echo "[起動スクリプト] ERROR: uv が見つかりません" > /var/log/app-backend.log
-  exit 1
-fi
-
-nohup "$UV_BIN" run --directory backend uvicorn app.main:app --host "${API_HOST}" --port "${API_PORT}" > /var/log/app-backend.log 2>&1 &
-
-sleep 5
-
-echo "セマンティック文書検索フロントエンドサービスを起動中..."
-cd /u01/aipoc/no.1-semantic-doc-search/frontend
-nohup npm run preview -- --host 0.0.0.0 --port "${FRONTEND_PORT}" > /var/log/app-frontend.log 2>&1 &
-
-echo "セマンティック文書検索サービスが起動しました。"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+readonly INSTALL_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PROJECT_ROOT="${PROJECT_ROOT:-${INSTALL_ROOT}/no.1-semantic-doc-search}"
+export LOG_DIR="${LOG_DIR:-/var/log}"
+exec bash "${PROJECT_ROOT}/scripts/start-production-services.sh"
 EOF
-
 chmod +x "${INSTALL_DIR}/start_semantic_doc_search_services.sh"
 
 # Cron job (Idempotent)

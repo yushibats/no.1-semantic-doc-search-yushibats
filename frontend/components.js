@@ -460,7 +460,6 @@ function openModal(modalId) {
   const modal = document.getElementById(modalId);
   if (modal) {
     modal.showModal();
-    console.log(`モーダルを開きました: ${modalId}`);
   } else {
     console.error(`モーダルが見つかりません: ${modalId}`);
   }
@@ -477,7 +476,6 @@ function closeModal(modalId) {
   const modal = document.getElementById(modalId);
   if (modal) {
     modal.close();
-    console.log(`モーダルを閉じました: ${modalId}`);
   } else {
     console.error(`モーダルが見つかりません: ${modalId}`);
   }
@@ -566,7 +564,7 @@ function showModal({
   const modalHtml = `
     <div id="${modalId}" class="modern-modal-overlay">
       <div class="modern-modal-backdrop" data-modal-close></div>
-      <div class="modern-modal-container">
+      <div class="modern-modal-container" role="dialog" aria-modal="true" aria-labelledby="${modalId}-title" aria-describedby="${modalId}-content">
         <!-- アイコン -->
         <div class="modern-modal-icon" style="${config.iconBgStyle}">
           ${icon || config.iconSvg}
@@ -574,20 +572,18 @@ function showModal({
         
         <!-- ヘッダー -->
         <div class="modern-modal-header">
-          <h3 class="modern-modal-title">${title}</h3>
+          <h3 id="${modalId}-title" class="modern-modal-title">${title}</h3>
         </div>
         
         <!-- コンテンツ -->
         <div class="modern-modal-body">
-          <div class="modern-modal-content">${processedContent}</div>
+          <div id="${modalId}-content" class="modern-modal-content">${processedContent}</div>
         </div>
         
         <!-- フッター（ボタン） -->
         <div class="modern-modal-footer">
-          <button id="${modalId}-cancel-btn" class="modern-modal-btn modern-modal-btn-secondary">
-            ${cancelText}
-          </button>
-          <button id="${modalId}-confirm-btn" class="modern-modal-btn modern-modal-btn-confirm" style="${config.confirmBtnStyle}">
+          ${cancelText ? `<button type="button" id="${modalId}-cancel-btn" class="modern-modal-btn modern-modal-btn-secondary">${cancelText}</button>` : ''}
+          <button type="button" id="${modalId}-confirm-btn" class="modern-modal-btn modern-modal-btn-confirm" style="${config.confirmBtnStyle}">
             ${confirmText}
           </button>
         </div>
@@ -622,11 +618,10 @@ function showModal({
       
       .modern-modal-container {
         position: relative;
-        background: #fff;
+        background: white;
         border-radius: 16px;
-        max-width: min(1260px, 92vw);
-        width: min(1260px, 92vw);
-        margin: 0 auto;
+        max-width: 420px;
+        width: 100%;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
         animation: modernModalSlideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         overflow: hidden;
@@ -662,16 +657,9 @@ function showModal({
       .modern-modal-content {
         font-size: 14px;
         color: #475569;
-        line-height: 1.75;
-        text-align: left;
+        line-height: 1.6;
+        text-align: center;
         white-space: pre-line;
-        background: #f8fafc;
-        border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        padding: 16px 18px;
-        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
-        max-height: 52vh;
-        overflow: auto;
       }
       
       .modern-modal-footer {
@@ -797,6 +785,8 @@ function showModal({
   modalContainer.innerHTML = modalHtml;
   document.body.appendChild(modalContainer.firstElementChild);
 
+  const previousActiveElement = document.activeElement;
+
   // ESCキーハンドラー（先に定義）
   let handleEsc = null;
 
@@ -820,6 +810,9 @@ function showModal({
       }
       setTimeout(() => modal.remove(), 200);
     }
+    if (previousActiveElement instanceof HTMLElement && document.body.contains(previousActiveElement)) {
+      previousActiveElement.focus();
+    }
   };
 
   // イベントリスナーを設定
@@ -835,10 +828,14 @@ function showModal({
   });
 
   // キャンセルボタン
-  cancelBtn.addEventListener('click', () => {
-    closeConfirmModal();
-    if (onCancel) onCancel();
-  });
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      closeConfirmModal();
+      if (onCancel) onCancel();
+    });
+  }
+
+  (cancelBtn || confirmBtn).focus();
 
   // 背景クリックで閉じる
   if (backdrop) {
@@ -853,11 +850,18 @@ function showModal({
     if (e.key === 'Escape') {
       closeConfirmModal();
       if (onCancel) onCancel();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const focusable = [cancelBtn, confirmBtn].filter(Boolean);
+      const current = focusable.indexOf(document.activeElement);
+      if (focusable.length === 1 || (!e.shiftKey && current === focusable.length - 1) || (e.shiftKey && current === 0)) {
+        e.preventDefault();
+        focusable[e.shiftKey ? focusable.length - 1 : 0].focus();
+      }
     }
   };
   document.addEventListener('keydown', handleEsc);
-
-  console.log(`確認モーダルを表示: ${title}`);
 }
 
 // ========================================
@@ -943,7 +947,6 @@ function toggleCardCollapse(contentId) {
   if (content && toggle) {
     const isHidden = content.classList.toggle('hidden');
     toggle.querySelector('svg').classList.toggle('rotate-180', isHidden);
-    console.log(`カードを${isHidden ? '折りたたみ' : '展開'}ました: ${contentId}`);
   }
 }
 
@@ -1104,8 +1107,6 @@ function showToast(message, type = 'info', duration = 4000) {
   `;
 
   container.appendChild(toast);
-  console.log(`トースト通知を表示: [${type}] ${message}`);
-
   // 自動削除
   if (duration > 0) {
     setTimeout(() => {
@@ -1357,8 +1358,6 @@ if (typeof window !== 'undefined') {
     renderBadge,
     renderAlert
   };
-  
-  console.log('統一UIコンポーネントライブラリが読み込まれました');
 }
 
 // Node.js環境用のエクスポート

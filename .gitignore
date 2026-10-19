@@ -49,6 +49,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.local/
 
 # Storage
 storage/
@@ -63,9 +64,6 @@ logs/
 # OCI Config
 .oci/
 
-# Customized
-reference/
-
 # Backup files
 *.bak
 *.backup
@@ -78,10 +76,6 @@ backup/
 temp/
 tmp/
 
-# Documentation (generated or temporary)
-abc.md
-test_*.py
-
 # Presentation files
 *.pptx
 *.ppt
@@ -90,3 +84,24 @@ test_*.py
 
 # Python virtual environment (project specific)
 backend/.venv/
+
+# Sample
+sample_files/
+examples/
+
+# Deployment state, secrets, runtime data and release outputs
+.env.*
+!.env.example
+.terraform/
+*.tfstate*
+*.tfvars
+*.tfvars.json
+*.pem
+*.key
+*.p12
+*.sso
+*.zip
+*.before-*
+backend/backups/
+frontend/test-results/
+frontend/playwright-report/

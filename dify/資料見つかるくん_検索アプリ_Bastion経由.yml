@@ -186,7 +186,7 @@ workflow:
         title: 開始
         type: start
         variables:
-        - default: http://10.0.1.65/
+        - default: https://your-app.example.com/
           hint: ''
           label: API_ENDPOINT
           max_length: 120

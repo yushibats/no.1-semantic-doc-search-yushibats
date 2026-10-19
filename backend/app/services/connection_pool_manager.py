@@ -6,6 +6,7 @@ Thin mode対応の接続プールを管理し、遅延初期化とリトライ�
 """
 import logging
 import os
+import re
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
@@ -59,6 +60,7 @@ class ConnectionPoolManager:
         if not self.__class__._initialized:
             self._pool = None
             self._pool_settings: Dict[str, Any] = {}
+            self._no_retry = False  # 回復不能エラー時にリトライを打ち切るフラグ
             self.__class__._initialized = True
             logger.info("========== ConnectionPoolManager初期化 ==========")
             logger.info("接続プールマネージャーをシングルトンモードで初期化しました")
@@ -89,11 +91,39 @@ class ConnectionPoolManager:
                 return None
         
         wallet_location = os.path.join(lib_dir, "network", "admin")
-        
+
         if os.path.exists(wallet_location):
             return wallet_location
-        
+
         return None
+
+    @staticmethod
+    def _resolve_dsn_fast_fail(dsn: str, wallet_location: str) -> str:
+        """DSNエイリアスをtnsnames.oraの接続記述子に解決し、retry_countを0に書き換える。
+
+        ADBのtnsnames.oraには (retry_count=20)(retry_delay=3) が埋め込まれており、
+        DB停止時に接続1回あたり60秒以上リトライし続ける。python-oracledbの
+        retry_count引数は記述子内の値に上書きされるため、記述子自体を書き換える。
+        解決できない場合は元のDSNをそのまま返す。
+        """
+        if "(" in dsn:  # 既に記述子形式
+            descriptor = dsn
+        else:
+            try:
+                with open(os.path.join(wallet_location, "tnsnames.ora")) as f:
+                    tns = f.read()
+                m = re.search(
+                    rf"^\s*{re.escape(dsn)}\s*=\s*(\(.*)$", tns,
+                    re.MULTILINE | re.IGNORECASE,
+                )
+                if not m:
+                    return dsn
+                descriptor = m.group(1).strip()
+            except OSError:
+                return dsn
+        descriptor = re.sub(r"\(retry_count=\d+\)", "(retry_count=0)", descriptor)
+        descriptor = re.sub(r"\(retry_delay=\d+\)", "(retry_delay=1)", descriptor)
+        return descriptor
     
     def _create_pool_internal(self, username: str, password: str, dsn: str) -> Optional[Any]:
         """接続プールを内部的に作成（リトライなし）
@@ -141,19 +171,20 @@ class ConnectionPoolManager:
         
         # 接続プール作成
         try:
-            logger.info(f"接続プール作成中...")
+            logger.info("接続プール作成中...")
             logger.info(f"  user={username}, dsn={dsn}")
             logger.info(f"  min={self.POOL_MIN}, max={self.POOL_MAX}, increment={self.POOL_INCREMENT}")
-            logger.info(f"  getmode=oracledb.POOL_GETMODE_WAIT")
-            logger.info(f"  wait_timeout={self.GET_CONNECTION_TIMEOUT}, timeout={self.TCP_CONNECT_TIMEOUT}")
+            logger.info("  getmode=oracledb.POOL_GETMODE_WAIT")
+            logger.info(f"  wait_timeout={self.GET_CONNECTION_TIMEOUT}, tcp_connect_timeout={self.TCP_CONNECT_TIMEOUT}")
             
             start_time = time.time()
             
             # Thin mode接続プール作成
+            # DSNは記述子に解決してretry_count=0に書き換え済み（DB停止時に即失敗させる）
             pool = oracledb.create_pool(
                 user=username,
                 password=password,
-                dsn=dsn,
+                dsn=self._resolve_dsn_fast_fail(dsn, wallet_location),
                 min=self.POOL_MIN,
                 max=self.POOL_MAX,
                 increment=self.POOL_INCREMENT,
@@ -162,7 +193,7 @@ class ConnectionPoolManager:
                 wallet_location=wallet_location,
                 wallet_password=password,
                 wait_timeout=self.GET_CONNECTION_TIMEOUT,  # プールから接続取得時の待機タイムアウト
-                timeout=self.TCP_CONNECT_TIMEOUT  # TCP接続タイムアウト
+                tcp_connect_timeout=self.TCP_CONNECT_TIMEOUT  # TCP接続タイムアウト（DB停止時に長時間ハングさせない）
             )
             
             elapsed = time.time() - start_time
@@ -182,20 +213,24 @@ class ConnectionPoolManager:
         except Exception as e:
             logger.error(f"✘ 接続プール作成失敗: {e}")
             logger.error(f"  エラータイプ: {type(e).__name__}")
-            
+
             # エラー詳細を解析
             error_str = str(e)
             if "DPY-6005" in error_str or "DPY-6000" in error_str:
                 logger.error("  原因: データベースが停止している可能性があります")
+                self._no_retry = True
             elif "ORA-01017" in error_str:
                 logger.error("  原因: ユーザー名またはパスワードが正しくありません")
+                self._no_retry = True  # 認証失敗はリトライしても無駄
             elif "ORA-12154" in error_str:
                 logger.error("  原因: DSNが見つかりません")
+                self._no_retry = True
             elif "Broken pipe" in error_str or "errno 32" in error_str.lower():
                 logger.error("  原因: ネットワーク接続が切断されました")
             elif "timeout" in error_str.lower() or "timed out" in error_str.lower():
                 logger.error("  原因: データベースが起動していないか、ネットワーク接続が不可です")
-            
+                self._no_retry = True  # DB停止/接続不可はリトライせず即座に失敗させる
+
             return None
     
     def _create_pool_with_retry(self, username: str, password: str, dsn: str) -> Optional[Any]:
@@ -210,19 +245,27 @@ class ConnectionPoolManager:
             接続プール、または失敗時はNone
         """
         logger.info(f"接続プール作成開始 (MAX_RETRIES={self.MAX_RETRIES})")
-        
+
         for attempt in range(1, self.MAX_RETRIES + 1):
             logger.info(f"接続プール作成試行 {attempt}/{self.MAX_RETRIES}")
-            
+
+            self._no_retry = False
             pool = self._create_pool_internal(username, password, dsn)
             if pool:
                 return pool
-            
+
+            # DB停止・接続タイムアウト・認証/DSN誤りはリトライしても回復しない。
+            # リトライで待たせるとバックエンドがブロックされ他のリクエスト（OCID取得等）も
+            # タイムアウトするため、即座に失敗を返す。
+            if self._no_retry:
+                logger.warning("回復不能なエラーのためリトライを中止します（DB停止/接続不可等）")
+                break
+
             if attempt < self.MAX_RETRIES:
                 logger.info(f"{self.RETRY_DELAY}秒後にリトライ...")
                 time.sleep(self.RETRY_DELAY)
-        
-        logger.error(f"接続プール作成失敗: {self.MAX_RETRIES}回試行後")
+
+        logger.error("接続プール作成失敗")
         return None
     
     def initialize_pool(self, username: str, password: str, dsn: str) -> bool:
@@ -301,22 +344,7 @@ class ConnectionPoolManager:
                 # プールから接続を取得
                 connection = self._pool.acquire()
                 logger.debug("接続をプールから取得しました")
-                
-                try:
-                    # 接続を返す
-                    yield connection
-                finally:
-                    # 例外が発生しても必ず接続を返却
-                    if connection:
-                        try:
-                            self._pool.release(connection)
-                            logger.debug("接続をプールに返却しました")
-                        except Exception as release_err:
-                            logger.error(f"接続返却エラー: {release_err}")
-                
-                # 正常終了
-                return
-                
+                break
             except Exception as e:
                 error_str = str(e)
                 logger.error(f"接続取得エラー (試行{retry_count + 1}): {e}")
@@ -325,7 +353,7 @@ class ConnectionPoolManager:
                 if connection:
                     try:
                         connection.close()
-                    except:
+                    except Exception:
                         pass
                     connection = None
                 
@@ -354,6 +382,16 @@ class ConnectionPoolManager:
                 else:
                     logger.error(f"接続取得失敗: {self.MAX_RETRIES}回試行後")
                     raise
+
+        try:
+            yield connection
+        finally:
+            if connection:
+                try:
+                    self._pool.release(connection)
+                    logger.debug("接続をプールに返却しました")
+                except Exception as release_err:
+                    logger.error(f"接続返却エラー: {release_err}")
     
     def close_pool(self, timeout: Optional[int] = 30, force: bool = False):
         """接続プールをクローズ
@@ -372,7 +410,6 @@ class ConnectionPoolManager:
             if timeout is not None:
                 # タイムアウト付きクローズの実装
                 import threading
-                import signal
                 
                 def close_with_timeout():
                     try:

@@ -14,22 +14,21 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Homebrew の Node.js を通常の PATH から参照できない場合にも対応する。
+if [ "$(uname -s)" = "Darwin" ]; then
+  for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "${brew_bin}/brew" ]; then
+      PATH="${brew_bin}:$PATH"
+      if [ -d "$("${brew_bin}/brew" --prefix node@20 2>/dev/null)/bin" ]; then
+        PATH="$("${brew_bin}/brew" --prefix node@20)/bin:$PATH"
+      fi
+      break
+    fi
+  done
+  export PATH
+fi
+
 PORT="${FRONTEND_PORT:-5175}"
-
-# ルート/フロントエンド配下のenvを読み込み（必要ならVITE_*を上書き可能にする）
-if [ -f "$ROOT_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ROOT_DIR/.env"
-  set +a
-fi
-
-if [ -f "$ROOT_DIR/frontend/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$ROOT_DIR/frontend/.env"
-  set +a
-fi
 
 if ! command -v node >/dev/null 2>&1; then
   echo "[フロントエンド] ERROR: 'node' が見つかりません (Node.js 18+ をインストールしてください)" 1>&2
@@ -41,7 +40,7 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[フロントエンド] Vite Proxyを使用してバックエンドに接続 (/ai/api -> http://localhost:${BACKEND_PORT:-${API_PORT:-8081}})"
+echo "[フロントエンド] Vite Proxyを使用してバックエンドに接続 (/ai/api -> ${VITE_PROXY_TARGET:-http://localhost:8081})"
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -PiTCP:"$PORT" -sTCP:LISTEN -t || true)"
@@ -60,8 +59,8 @@ fi
 
 echo "[フロントエンド] 依存関係を確認中"
 if [ ! -d "frontend/node_modules" ]; then
-  echo "[フロントエンド] npm install 実行中..."
-  (cd frontend && npm install)
+  echo "[フロントエンド] npm ci 実行中..."
+  (cd frontend && npm ci)
 fi
 
 echo "[フロントエンド] Vite dev server をポート ${PORT} で起動中"
