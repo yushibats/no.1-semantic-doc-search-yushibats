@@ -18,6 +18,13 @@ import { appState, setAuthState } from '../state.js';
 // 開発時はViteのプロキシを使うため空文字列、本番ビルド時は環境変数から設定
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
+function directApiUrl(apiBase, endpoint) {
+  if (!apiBase) return endpoint;
+  const base = apiBase.replace(/\/+$/, '');
+  const path = endpoint.replace(/^\/ai\/api(?=\/|$)/, '') || '/';
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 // ========================================
 // グローバル変数
 // ========================================
@@ -35,18 +42,21 @@ const API_BASE = import.meta.env.VITE_API_BASE || '';
  * @param {boolean} [config.show_ai_assistant=true] - AIアシスタントを表示するかどうか
  * @param {boolean} [config.show_search_tab=true] - 検索タブを表示するかどうか
  */
+function syncCopilotVisibility(showAiAssistant = appState.get('showAiAssistant')) {
+  const isOpen = appState.get('copilotOpen');
+  const button = document.getElementById('copilotToggleBtn');
+  const panel = document.getElementById('copilotPanel');
+  if (button) button.style.display = showAiAssistant && !isOpen ? 'flex' : 'none';
+  if (panel) panel.style.display = showAiAssistant && isOpen ? 'flex' : 'none';
+}
+
 function applyUIFeatureToggles(config) {
+  const modelName = document.getElementById('copilotModelName');
+  if (modelName) modelName.textContent = config.enterprise_ai_model || '未設定';
+
   // AI Assistantの表示制御
   const showAiAssistant = config.show_ai_assistant !== false; // デフォルトはtrue
-  const copilotToggleBtn = document.getElementById('copilotToggleBtn');
-  const copilotPanel = document.getElementById('copilotPanel');
-  
-  if (showAiAssistant) {
-    if (copilotToggleBtn) copilotToggleBtn.style.display = 'block';
-  } else {
-    if (copilotToggleBtn) copilotToggleBtn.style.display = 'none';
-    if (copilotPanel) copilotPanel.style.display = 'none';
-  }
+  syncCopilotVisibility(showAiAssistant);
   
   // 検索タブの表示制御
   const showSearchTab = config.show_search_tab !== false; // デフォルトはtrue
@@ -93,8 +103,6 @@ export async function loadConfig() {
       // appStateに設定（oci.js等のモジュールから参照されるため）
       appState.set('debugMode', config.debug);
       appState.set('requireLogin', config.require_login);
-      appState.set('enableTextRag', !!config.enable_text_rag);
-      appState.set('searchMode', config.search_mode || 'image');
       appState.set('apiBase', API_BASE);
       
       // UI機能トグルを適用
@@ -210,7 +218,7 @@ export async function handleLogin(event) {
     }
     
     const apiBase = appState.get('apiBase') || '';
-    const url = apiBase ? `${apiBase}/api/login` : '/ai/api/login';
+    const url = directApiUrl(apiBase, '/ai/api/login');
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -248,10 +256,13 @@ export async function handleLogin(event) {
       
       // AI Assistantボタンの表示制御（設定に応じて）
       const showAiAssistant = appState.get('showAiAssistant');
-      const copilotBtn = document.getElementById('copilotToggleBtn');
-      if (copilotBtn && showAiAssistant) {
-        copilotBtn.style.display = 'flex';
-      }
+      syncCopilotVisibility(showAiAssistant);
+
+      // 認証前には取得しない検索条件を、ログイン成功後に読み込む
+      await window.searchModule?.loadDynamicSearchFilters?.();
+      // ログイン画面から復帰した場合も、永続化された処理タスクを
+      // すぐにタスクトレイへ戻します（ページ再読み込み時と同じ挙動）。
+      await window.pipelineModule?.restore?.();
     }
   } catch (error) {
     if (errorMessage) {
@@ -281,7 +292,7 @@ export async function handleLogout() {
     const loginToken = appState.get('loginToken');
     if (loginToken) {
       const apiBase = appState.get('apiBase') || '';
-      const url = apiBase ? `${apiBase}/api/logout` : '/ai/api/logout';
+      const url = directApiUrl(apiBase, '/ai/api/logout');
       await fetch(url, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${loginToken}` }
@@ -421,11 +432,7 @@ export function forceLogout() {
 }
 
 function showAuthenticatedUi() {
-  const showAiAssistant = appState.get('showAiAssistant');
-  const copilotBtn = document.getElementById('copilotToggleBtn');
-  if (copilotBtn && showAiAssistant) {
-    copilotBtn.style.display = 'flex';
-  }
+  syncCopilotVisibility();
 }
 
 function clearStoredAuthState() {
@@ -449,15 +456,8 @@ function clearStoredAuthState() {
  */
 export async function fetchWithAuth(endpoint, options = {}) {
   const apiBase = appState.get('apiBase') || '';
-  const url = apiBase ? `${apiBase}${endpoint}` : endpoint;
+  const url = directApiUrl(apiBase, endpoint);
   const headers = { ...(options.headers || {}) };
-
-  const isSearchRequest = /\/search(?:\/|$)/.test(endpoint || '');
-
-  if (isSearchRequest) {
-    if (!headers['Cache-Control']) headers['Cache-Control'] = 'no-store, no-cache, max-age=0';
-    if (!headers.Pragma) headers.Pragma = 'no-cache';
-  }
 
   const loginToken = localStorage.getItem('loginToken');
   if (loginToken) {
@@ -471,7 +471,6 @@ export async function fetchWithAuth(endpoint, options = {}) {
   try {
     const response = await fetch(url, {
       ...fetchOptions,
-      ...(isSearchRequest ? { cache: 'no-store' } : {}),
       headers,
       ...(controller ? { signal: controller.signal } : {})
     });
@@ -497,12 +496,7 @@ export async function fetchWithAuth(endpoint, options = {}) {
     }
 
     if (error.name === 'AbortError') {
-      throw new Error('リクエストがタイムアウトしました。データベースが起動していない可能性があります。');
-    }
-
-    // ネットワーク未接続・プロキシ未到達時（ブラウザ標準の "Failed to fetch"）
-    if (error instanceof TypeError && /Failed to fetch/i.test(error.message || '')) {
-      throw new Error('APIに接続できませんでした（Failed to fetch）。バックエンド起動状態・ポート（8081）・Viteプロキシ設定を確認してください。');
+      throw new Error('リクエストがタイムアウトしました。しばらくしてから再試行してください。');
     }
 
     throw error;
@@ -529,7 +523,9 @@ export async function apiCall(endpoint, options = {}) {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || 'リクエストに失敗しました');
+      const requestError = new Error(error.detail || 'リクエストに失敗しました');
+      requestError.status = response.status;
+      throw requestError;
     }
     
     return await response.json();

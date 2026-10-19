@@ -184,7 +184,13 @@ def _convert_text_to_pdf(temp_file: Path, file_ext: str, temp_dir: str) -> Optio
         # - IPA/Takao フォント: .ttf形式でfpdf2との互換性が高い
         # - 複数のパスを試行: 異なるLinuxディストリビューションに対応
         # - Noto Sans CJK: 理想的だが.ttc形式のためfpdf2では問題が発生する可能性あり
+        configured_font = os.getenv('JAPANESE_FONT_PATH', '').strip()
         japanese_fonts = [
+            # 明示設定（macOS など、標準パス以外に配置した場合）
+            configured_font,
+            # macOS（Homebrew Cask: font-ipaexfont）
+            str(Path.home() / 'Library/Fonts/ipaexg.ttf'),
+            '/Library/Fonts/ipaexg.ttf',
             # ゴシック体（推奨：読みやすさが高い）
             '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',       # IPAゴシック (Ubuntu/Debian)
             '/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf',  # Takaoゴシック (Ubuntu/Debian)
@@ -199,12 +205,13 @@ def _convert_text_to_pdf(temp_file: Path, file_ext: str, temp_dir: str) -> Optio
         font_name = 'Helvetica'
         font_loaded = False
         for font_path in japanese_fonts:
-            if Path(font_path).exists():
+            if font_path and Path(font_path).expanduser().exists():
                 try:
-                    pdf.add_font('Japanese', '', font_path)
+                    resolved_font_path = str(Path(font_path).expanduser())
+                    pdf.add_font('Japanese', '', resolved_font_path)
                     font_name = 'Japanese'
                     font_loaded = True
-                    logger.debug(f"日本語フォント読み込み成功: {font_path}")
+                    logger.debug(f"日本語フォント読み込み成功: {resolved_font_path}")
                     break
                 except Exception as font_error:
                     logger.warning(f"フォント読み込みエラー ({font_path}): {font_error}")
@@ -214,7 +221,7 @@ def _convert_text_to_pdf(temp_file: Path, file_ext: str, temp_dir: str) -> Optio
             # 警告: 日本語フォントが見つからない場合、日本語テキストは正しく表示されない
             logger.warning(
                 "日本語フォントが見つかりません。日本語テキストは正しく表示されない可能性があります。"
-                "init_script.sh で fonts-ipafont-gothic または fonts-takao をインストールしてください。"
+                "Linuxではinit_script.sh、macOSではscripts/setup-mac.shで日本語フォントをインストールしてください。"
             )
         
         # ページを追加してフォントを設定
@@ -355,7 +362,10 @@ def _run_soffice_convert_to_pdf(temp_file: Path, temp_dir: str, file_name: str) 
 def _convert_file_to_images_worker(
     file_content: bytes,
     file_ext: str,
-    file_name: str
+    file_name: str,
+    dpi: int = 200,
+    first_page: int | None = None,
+    last_page: int | None = None,
 ) -> Tuple[bool, List[Tuple[int, bytes]], str]:
     """
     ワーカープロセスで実行される画像変換関数
@@ -377,7 +387,10 @@ def _convert_file_to_images_worker(
         images = []
         
         if file_ext == 'pdf':
-            pil_images = convert_from_path(str(temp_file), dpi=200, fmt='PNG')
+            pil_images = convert_from_path(
+                str(temp_file), dpi=dpi, fmt='PNG',
+                first_page=first_page, last_page=last_page,
+            )
             images = pil_images
         elif file_ext in ['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx']:
             # LibreOfficeでPDFに変換
@@ -391,7 +404,7 @@ def _convert_file_to_images_worker(
                     pdf_path = pdf_files[0]
                     logger.info(f"フォールバックPDFファイル使用: {pdf_path.name}")
             if pdf_path.exists():
-                images = convert_from_path(str(pdf_path), dpi=200, fmt='PNG')
+                images = convert_from_path(str(pdf_path), dpi=dpi, fmt='PNG')
             else:
                 return False, [], "PDF変換に失敗しました"
         elif file_ext in ['png', 'jpg', 'jpeg']:
@@ -403,7 +416,7 @@ def _convert_file_to_images_worker(
             # TXT/Markdown → PDF変換
             pdf_path = _convert_text_to_pdf(temp_file, file_ext, temp_dir)
             if pdf_path and pdf_path.exists():
-                images = convert_from_path(str(pdf_path), dpi=200, fmt='PNG')
+                images = convert_from_path(str(pdf_path), dpi=dpi, fmt='PNG')
             else:
                 return False, [], "TXT/Markdown変換に失敗しました"
         else:
@@ -411,7 +424,7 @@ def _convert_file_to_images_worker(
         
         # 画像をバイト列に変換
         result_images = []
-        for i, img in enumerate(images, start=1):
+        for i, img in enumerate(images, start=first_page or 1):
             img_bytes = io.BytesIO()
             img.save(img_bytes, format='PNG')
             img_bytes.seek(0)
@@ -1886,7 +1899,8 @@ class ParallelProcessor:
         oci_service: Any,
         image_vectorizer: Any,
         database_service: Any,
-        job_id: str
+        job_id: str,
+        rag_repository: Any = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         複数オブジェクトを並列で削除（SSEストリーミング対応）
@@ -1904,6 +1918,7 @@ class ParallelProcessor:
             image_vectorizer: 画像ベクトル化インスタンス
             database_service: データベースサービスインスタンス
             job_id: ジョブID
+            rag_repository: Artifact/Release lineageを削除するRepository
             
         Yields:
             SSEイベント辞書
@@ -2018,6 +2033,14 @@ class ParallelProcessor:
                     return
                 
                 if delete_result.get('success'):
+                    if rag_repository is not None and not (
+                        obj_name.endswith('/') or '/page_' in obj_name
+                    ):
+                        await asyncio.to_thread(
+                            rag_repository.delete_document_by_object,
+                            bucket=bucket_name,
+                            object_name=obj_name,
+                        )
                     result['success'] = True
                     result['message'] = '削除完了'
                     await JobManager.increment_completed(job_id)

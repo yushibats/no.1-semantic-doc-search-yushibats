@@ -12,7 +12,6 @@ Oracle Database接続とクエリ実行を管理するサービスです。
 - テーブル情報の取得と管理
 """
 import asyncio
-import array
 import json
 import logging
 import os
@@ -1157,23 +1156,30 @@ class DatabaseService:
             return None
     
     def refresh_table_statistics(self) -> Dict[str, Any]:
-        """全テーブルの統計情報を更新（接続プール経由）"""
+        """システムテーブルの統計情報を更新（接続プール経由）"""
         try:
             if not ORACLEDB_AVAILABLE:
                 return {"success": False, "message": "Oracle DBが利用できません", "updated_count": 0}
             
             if not self._ensure_pool_initialized():
                 return {"success": False, "message": "データベース接続に失敗しました", "updated_count": 0}
+
+            from app.rag.oracle_schema import system_table_names
+
+            table_binds = {
+                f"table_{index}": name
+                for index, name in enumerate(system_table_names())
+            }
+            table_placeholders = ", ".join(f":{name}" for name in table_binds)
             
             with self.pool_manager.acquire_connection() as connection:
                 cursor = connection.cursor()
                 
-                # '$'を含まないテーブル一覧を取得
-                cursor.execute("""
-                    SELECT table_name 
-                    FROM user_tables 
-                    WHERE table_name NOT LIKE '%$%'
-                """)
+                cursor.execute(
+                    f"SELECT table_name FROM user_tables "
+                    f"WHERE table_name IN ({table_placeholders})",
+                    table_binds,
+                )
                 tables = cursor.fetchall()
                 
                 updated_count = 0
@@ -1224,20 +1230,31 @@ class DatabaseService:
             }
     
     def get_tables(self, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
-        """テーブル一覧を取得（ページング対応、接続プール経由）"""
+        """システムテーブル一覧を取得（ページング対応、接続プール経由）"""
         try:
             if not ORACLEDB_AVAILABLE:
                 return {"tables": [], "total": 0}
             
             if not self._ensure_pool_initialized():
                 return {"tables": [], "total": 0}
+
+            from app.rag.oracle_schema import system_table_names
+
+            table_binds = {
+                f"table_{index}": name
+                for index, name in enumerate(system_table_names())
+            }
+            table_placeholders = ", ".join(f":{name}" for name in table_binds)
             
             with self.pool_manager.acquire_connection() as connection:
                 cursor = connection.cursor()
                 
-                # 総件数を取得（'$'を含むテーブルを除外）
-                count_query = "SELECT COUNT(*) FROM user_tables WHERE table_name NOT LIKE '%$%'"
-                cursor.execute(count_query)
+                # 総件数を取得（このシステムが利用するテーブルのみ）
+                count_query = (
+                    "SELECT COUNT(*) FROM user_tables "
+                    f"WHERE table_name IN ({table_placeholders})"
+                )
+                cursor.execute(count_query, table_binds)
                 total = cursor.fetchone()[0]
                 
                 # ページング用の範囲計算
@@ -1245,7 +1262,6 @@ class DatabaseService:
                 end_row = page * page_size
                 
                 # 最適化：先にページングを完了し、その後JOINを実行
-                # '$'を含むテーブルを除外
                 query = """
                     SELECT 
                         p.table_name,
@@ -1262,16 +1278,19 @@ class DatabaseService:
                                 last_analyzed,
                                 ROW_NUMBER() OVER (ORDER BY table_name) rn
                             FROM user_tables
-                            WHERE table_name NOT LIKE '%$%'
+                            WHERE table_name IN ({table_placeholders})
                         )
                         WHERE rn BETWEEN :start_row AND :end_row
                     ) p
                     LEFT JOIN user_objects o ON p.table_name = o.object_name AND o.object_type = 'TABLE'
                     LEFT JOIN user_tab_comments c ON p.table_name = c.table_name
                     ORDER BY p.rn
-                """
+                """.format(table_placeholders=table_placeholders)
                 
-                cursor.execute(query, {"start_row": start_row, "end_row": end_row})
+                cursor.execute(
+                    query,
+                    {**table_binds, "start_row": start_row, "end_row": end_row},
+                )
                 rows = cursor.fetchall()
                 
                 tables = []
@@ -1451,7 +1470,7 @@ class DatabaseService:
             return {"success": False, "deleted_count": 0, "message": str(e), "errors": errors}
     
     def delete_file_info_records(self, file_ids: list) -> Dict[str, Any]:
-        """FILE_INFOテーブルのレコードを一括削除（接続プール経由、関連するIMG_EMBEDDINGSも自動削除）"""
+        """SDS_FILESテーブルのレコードを一括削除（接続プール経由、関連するSDS_IMAGE_EMBEDDINGSも自動削除）"""
         deleted_count = 0
         errors = []
         
@@ -1484,23 +1503,23 @@ class DatabaseService:
                         file_id_int = int(file_id)
                         
                         # 削除前にレコードの存在を確認
-                        cursor.execute('SELECT FILE_ID, BUCKET, OBJECT_NAME FROM FILE_INFO WHERE FILE_ID = :file_id', {'file_id': file_id_int})
+                        cursor.execute('SELECT FILE_ID, BUCKET, OBJECT_NAME FROM SDS_FILES WHERE FILE_ID = :file_id', {'file_id': file_id_int})
                         existing_record = cursor.fetchone()
                         if existing_record:
                             logger.info(f"削除対象レコード発見: FILE_ID={existing_record[0]}")
                         else:
                             logger.warning(f"削除対象レコードが見つかりません: FILE_ID={file_id_int}")
                         
-                        # DELETE文を実行（CASCADE制約によりIMG_EMBEDDINGSも自動削除）
-                        cursor.execute('DELETE FROM FILE_INFO WHERE FILE_ID = :file_id', {'file_id': file_id_int})
+                        # DELETE文を実行（CASCADE制約によりSDS_IMAGE_EMBEDDINGSも自動削除）
+                        cursor.execute('DELETE FROM SDS_FILES WHERE FILE_ID = :file_id', {'file_id': file_id_int})
                         
                         row_count = cursor.rowcount
                         if row_count > 0:
                             deleted_count += 1
-                            logger.info(f"FILE_INFOレコード削除成功: FILE_ID={file_id_int}")
+                            logger.info(f"SDS_FILESレコード削除成功: FILE_ID={file_id_int}")
                         else:
                             errors.append(f"FILE_ID={file_id_int}: レコードが見つかりません")
-                            logger.warning(f"FILE_INFOレコードが見つかりません: FILE_ID={file_id_int}")
+                            logger.warning(f"SDS_FILESレコードが見つかりません: FILE_ID={file_id_int}")
                         
                     except ValueError as ve:
                         error_msg = f"無効なFILE_ID: {file_id}"
@@ -1509,7 +1528,7 @@ class DatabaseService:
                     except Exception as e:
                         error_msg = f"FILE_ID={file_id}: {str(e)}"
                         errors.append(error_msg)
-                        logger.error(f"FILE_INFOレコード削除エラー: {error_msg}", exc_info=True)
+                        logger.error(f"SDS_FILESレコード削除エラー: {error_msg}", exc_info=True)
                 
                 # コミット
                 logger.info(f"COMMIT実行中... deleted_count={deleted_count}")
@@ -1527,7 +1546,7 @@ class DatabaseService:
             return result
         
         except Exception as e:
-            logger.error(f"FILE_INFOレコード一括削除エラー: {e}", exc_info=True)
+            logger.error(f"SDS_FILESレコード一括削除エラー: {e}", exc_info=True)
             return {"success": False, "deleted_count": 0, "message": str(e), "errors": errors}
     
     def delete_table_data(self, table_name: str, primary_keys: list) -> Dict[str, Any]:
@@ -1622,292 +1641,6 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"テーブルデータ削除エラー: {e}", exc_info=True)
             return {"success": False, "deleted_count": 0, "message": str(e), "errors": errors}
-
-    def ensure_text_chunks_table(self) -> Dict[str, Any]:
-        """TEXT_CHUNKSテーブルを作成（未存在時）"""
-        try:
-            if not ORACLEDB_AVAILABLE:
-                return {"success": False, "message": "Oracle DBが利用できません"}
-            if not self._ensure_pool_initialized():
-                return {"success": False, "message": "データベース接続に失敗しました"}
-
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = 'TEXT_CHUNKS'")
-                    exists = cursor.fetchone()[0] > 0
-
-                    if not exists:
-                        cursor.execute(
-                            """
-                            CREATE TABLE TEXT_CHUNKS (
-                                CHUNK_ID NUMBER GENERATED BY DEFAULT AS IDENTITY
-                                    MINVALUE 1
-                                    MAXVALUE 9999999999999999999999999999
-                                    INCREMENT BY 1
-                                    START WITH 1
-                                    CACHE 20
-                                    NOORDER NOCYCLE NOKEEP NOSCALE,
-                                BUCKET VARCHAR2(128 BYTE) COLLATE USING_NLS_COMP,
-                                OBJECT_NAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
-                                ORIGINAL_FILENAME VARCHAR2(1024 BYTE) COLLATE USING_NLS_COMP,
-                                CHUNK_INDEX NUMBER,
-                                PAGE_NUMBER NUMBER,
-                                CHUNK_TEXT CLOB,
-                                CHAR_COUNT NUMBER,
-                                EMBEDDING VECTOR(1536, FLOAT32),
-                                CREATED_AT TIMESTAMP(6) DEFAULT SYSTIMESTAMP,
-                                CONSTRAINT PK_TEXT_CHUNKS PRIMARY KEY (CHUNK_ID)
-                            ) DEFAULT COLLATION USING_NLS_COMP
-                            """
-                        )
-                        cursor.execute(
-                            """
-                            CREATE UNIQUE INDEX UX_TEXT_CHUNKS_FILE_CHUNK
-                            ON TEXT_CHUNKS (BUCKET, OBJECT_NAME, CHUNK_INDEX)
-                            """
-                        )
-                    else:
-                        cursor.execute(
-                            "SELECT COUNT(*) FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'TEXT_CHUNKS' AND COLUMN_NAME = 'PAGE_NUMBER'"
-                        )
-                        has_page_number = cursor.fetchone()[0] > 0
-                        if not has_page_number:
-                            cursor.execute("ALTER TABLE TEXT_CHUNKS ADD PAGE_NUMBER NUMBER")
-                        connection.commit()
-                        return {"success": True, "message": "TEXT_CHUNKSテーブルを作成しました"}
-
-                return {"success": True, "message": "TEXT_CHUNKSテーブルは既に存在します"}
-        except Exception as e:
-            logger.error(f"TEXT_CHUNKSテーブル作成エラー: {e}", exc_info=True)
-            return {"success": False, "message": str(e)}
-
-    def replace_text_chunks(
-        self,
-        bucket: str,
-        object_name: str,
-        original_filename: str,
-        chunks: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """対象ファイルのTEXT_CHUNKSを全置換"""
-        try:
-            if not ORACLEDB_AVAILABLE:
-                return {"success": False, "message": "Oracle DBが利用できません"}
-            if not self._ensure_pool_initialized():
-                return {"success": False, "message": "データベース接続に失敗しました"}
-
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        "DELETE FROM TEXT_CHUNKS WHERE BUCKET = :bucket AND OBJECT_NAME = :object_name",
-                        {"bucket": bucket, "object_name": object_name},
-                    )
-
-                    for chunk in chunks:
-                        embedding_array = array.array("f", chunk["embedding"].tolist())
-                        cursor.execute(
-                            """
-                            INSERT INTO TEXT_CHUNKS
-                            (BUCKET, OBJECT_NAME, ORIGINAL_FILENAME, CHUNK_INDEX, PAGE_NUMBER, CHUNK_TEXT, CHAR_COUNT, EMBEDDING)
-                            VALUES
-                            (:bucket, :object_name, :original_filename, :chunk_index, :page_number, :chunk_text, :char_count, :embedding)
-                            """,
-                            {
-                                "bucket": bucket,
-                                "object_name": object_name,
-                                "original_filename": original_filename,
-                                "chunk_index": int(chunk["chunk_index"]),
-                                "page_number": int(chunk.get("page_number", 1)),
-                                "chunk_text": chunk["chunk_text"],
-                                "char_count": int(chunk["char_count"]),
-                                "embedding": embedding_array,
-                            },
-                        )
-                    connection.commit()
-
-            return {"success": True, "message": f"{len(chunks)}件のチャンクを保存しました"}
-        except Exception as e:
-            logger.error(f"TEXT_CHUNKS保存エラー: {e}", exc_info=True)
-            return {"success": False, "message": str(e)}
-
-    def get_text_index_status(self, bucket: str, object_names: List[str]) -> Dict[str, bool]:
-        """対象ファイルのテキスト索引化状態（TEXT_CHUNKS存在有無）を取得"""
-        result = {name: False for name in object_names}
-
-        if not object_names:
-            return result
-
-        try:
-            if not ORACLEDB_AVAILABLE or not self._ensure_pool_initialized():
-                return result
-
-            placeholders = ", ".join([f":obj_{i}" for i in range(len(object_names))])
-            sql = f"""
-                SELECT OBJECT_NAME, COUNT(*) AS chunk_count
-                FROM TEXT_CHUNKS
-                WHERE BUCKET = :bucket
-                  AND OBJECT_NAME IN ({placeholders})
-                GROUP BY OBJECT_NAME
-            """
-
-            params: Dict[str, Any] = {"bucket": bucket}
-            for i, name in enumerate(object_names):
-                params[f"obj_{i}"] = name
-
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(sql, params)
-                    for row in cursor.fetchall():
-                        object_name = row[0]
-                        chunk_count = row[1] or 0
-                        result[object_name] = chunk_count > 0
-
-            return result
-
-        except Exception as e:
-            # TEXT_CHUNKSテーブル未作成時は未索引化として扱う
-            if "ORA-00942" in str(e):
-                logger.info("TEXT_CHUNKSテーブルが未作成のため、テキスト索引化状態はすべて未実行として扱います")
-                return result
-
-            logger.error(f"テキスト索引化状態取得エラー: {e}", exc_info=True)
-            return result
-
-    def search_text_chunks_by_vector(
-        self,
-        query_embedding,
-        limit: int = 10,
-        threshold: float = 0.7,
-        filename_filter: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """TEXT_CHUNKSに対してベクトル検索"""
-        try:
-            if not ORACLEDB_AVAILABLE or not self._ensure_pool_initialized():
-                return []
-
-            embedding_array = array.array("f", query_embedding.tolist())
-
-            where_clause = "VECTOR_DISTANCE(tc.EMBEDDING, :query_embedding, COSINE) <= :threshold"
-            if filename_filter:
-                where_clause += " AND UPPER(tc.ORIGINAL_FILENAME) LIKE UPPER(:filename_filter)"
-
-            sql = f"""
-                SELECT
-                    tc.CHUNK_ID,
-                    tc.BUCKET,
-                    tc.OBJECT_NAME,
-                    tc.ORIGINAL_FILENAME,
-                    tc.CHUNK_INDEX,
-                    tc.PAGE_NUMBER,
-                    tc.CHUNK_TEXT,
-                    tc.CHAR_COUNT,
-                    VECTOR_DISTANCE(tc.EMBEDDING, :query_embedding, COSINE) AS vector_distance
-                FROM TEXT_CHUNKS tc
-                WHERE {where_clause}
-                ORDER BY vector_distance ASC
-                FETCH FIRST :limit ROWS ONLY
-            """
-
-            params = {
-                "query_embedding": embedding_array,
-                "threshold": threshold,
-                "limit": limit,
-            }
-            if filename_filter:
-                params["filename_filter"] = f"%{filename_filter}%"
-
-            rows: List[Dict[str, Any]] = []
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(sql, params)
-                    for row in cursor.fetchall():
-                        chunk_text = row[6]
-                        if hasattr(chunk_text, "read"):
-                            chunk_text = chunk_text.read()
-                        rows.append(
-                            {
-                                "chunk_id": row[0],
-                                "bucket": row[1],
-                                "object_name": row[2],
-                                "original_filename": row[3],
-                                "chunk_index": row[4],
-                                "page_number": row[5],
-                                "chunk_text": chunk_text,
-                                "char_count": row[7],
-                                "vector_distance": float(row[8]),
-                            }
-                        )
-            return rows
-        except Exception as e:
-            logger.error(f"TEXT_CHUNKSベクトル検索エラー: {e}", exc_info=True)
-            return []
-
-    def search_text_chunks_by_keyword(
-        self,
-        query: str,
-        limit: int = 20,
-        filename_filter: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """TEXT_CHUNKSに対してキーワード検索（LIKE）"""
-        try:
-            if not ORACLEDB_AVAILABLE or not self._ensure_pool_initialized():
-                return []
-
-            terms = [t for t in re.split(r"\s+", query.strip()) if t]
-            if not terms:
-                return []
-
-            and_conditions = []
-            params: Dict[str, Any] = {"limit": limit}
-            for i, term in enumerate(terms[:5]):
-                key = f"term_{i}"
-                # CLOB列に対してはLIKEよりDBMS_LOB.INSTRを利用
-                and_conditions.append(f"DBMS_LOB.INSTR(LOWER(tc.CHUNK_TEXT), LOWER(:{key})) > 0")
-                params[key] = term
-
-            where_clause = " AND ".join(and_conditions) if and_conditions else "1=1"
-            if filename_filter:
-                where_clause += " AND UPPER(tc.ORIGINAL_FILENAME) LIKE UPPER(:filename_filter)"
-                params["filename_filter"] = f"%{filename_filter}%"
-
-            sql = f"""
-                SELECT
-                    tc.CHUNK_ID,
-                    tc.BUCKET,
-                    tc.OBJECT_NAME,
-                    tc.ORIGINAL_FILENAME,
-                    tc.CHUNK_INDEX,
-                    tc.PAGE_NUMBER,
-                    tc.CHUNK_TEXT,
-                    tc.CHAR_COUNT
-                FROM TEXT_CHUNKS tc
-                WHERE {where_clause}
-                FETCH FIRST :limit ROWS ONLY
-            """
-
-            rows: List[Dict[str, Any]] = []
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(sql, params)
-                    for row in cursor.fetchall():
-                        chunk_text = row[6]
-                        if hasattr(chunk_text, "read"):
-                            chunk_text = chunk_text.read()
-                        rows.append(
-                            {
-                                "chunk_id": row[0],
-                                "bucket": row[1],
-                                "object_name": row[2],
-                                "original_filename": row[3],
-                                "chunk_index": row[4],
-                                "page_number": row[5],
-                                "chunk_text": chunk_text,
-                                "char_count": row[7],
-                            }
-                        )
-            return rows
-        except Exception as e:
-            logger.error(f"TEXT_CHUNKSキーワード検索エラー: {e}", exc_info=True)
-            return []
     
     def get_env_connection_info(self) -> Dict[str, Any]:
         """環境変数からDB接続情報を取得、Wallet未設定時はADB_OCIDから自動ダウンロード"""
@@ -2012,6 +1745,7 @@ class DatabaseService:
         Returns:
             Dict: {"success": bool, "message": str, "available_services": List[str]}
         """
+        temp_wallet_path = None
         try:
             import oci
             from app.services.oci_service import oci_service
@@ -2054,12 +1788,14 @@ class DatabaseService:
             )
             
             # Walletを一時ファイルに保存
-            temp_wallet_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-            with open(temp_wallet_file.name, 'wb') as f:
-                for chunk in wallet_response.data.raw.stream(1024 * 1024, decode_content=False):
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as temp_wallet_file:
+                temp_wallet_path = temp_wallet_file.name
+
+            with open(temp_wallet_path, 'wb') as f:
+                for chunk in wallet_response.data.raw.stream(1024 * 1024, decode_content=True):
                     f.write(chunk)
             
-            logger.info(f"Walletダウンロード完了: {temp_wallet_file.name}")
+            logger.info(f"Walletダウンロード完了: {temp_wallet_path}")
             
             # Walletを展開（ディレクトリが存在しなくてもパスを取得）
             wallet_location = self._get_wallet_location(create_if_missing=True)
@@ -2080,7 +1816,7 @@ class DatabaseService:
             os.makedirs(wallet_location, exist_ok=True)
             
             # ZIPファイルを展開
-            with zipfile.ZipFile(temp_wallet_file.name, 'r') as zip_ref:
+            with zipfile.ZipFile(temp_wallet_path, 'r') as zip_ref:
                 zip_ref.extractall(wallet_location)
             
             logger.info(f"Walletを展開しました: {wallet_location}")
@@ -2095,9 +1831,6 @@ class DatabaseService:
                         logger.info(f"不要なファイルを削除: {file}")
                     except Exception as e:
                         logger.warning(f"ファイル削除失敗: {file} - {e}")
-            
-            # 一時ファイルを削除
-            os.unlink(temp_wallet_file.name)
             
             # 必要なファイルの存在確認
             required_files = ['cwallet.sso', 'ewallet.pem', 'tnsnames.ora', 'sqlnet.ora']
@@ -2129,6 +1862,12 @@ class DatabaseService:
                 "message": f"Walletのダウンロードに失敗しました: {str(e)}",
                 "available_services": []
             }
+        finally:
+            if temp_wallet_path and os.path.exists(temp_wallet_path):
+                try:
+                    os.unlink(temp_wallet_path)
+                except OSError as cleanup_error:
+                    logger.warning(f"Wallet一時ファイル削除エラー: {cleanup_error}")
     
     def _update_env_file_dsn(self, username: str, password: str, dsn: str) -> bool:
         """

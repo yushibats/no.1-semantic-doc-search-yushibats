@@ -49,6 +49,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.local/
 
 # Storage
 storage/
@@ -81,6 +82,7 @@ tmp/
 # Documentation (generated or temporary)
 abc.md
 test_*.py
+!backend/tests/test_*.py
 
 # Presentation files
 *.pptx
@@ -90,3 +92,25 @@ test_*.py
 
 # Python virtual environment (project specific)
 backend/.venv/
+
+# Sample
+sample_files/
+examples/
+
+# Deployment state, secrets, runtime data and release outputs
+.env.*
+!.env.example
+.terraform/
+*.tfstate*
+*.tfvars
+*.tfvars.json
+*.pem
+*.key
+*.p12
+*.sso
+*.zip
+*.before-*
+backend/backups/
+frontend/test-results/
+frontend/playwright-report/
+!scripts/tests/test_*.py

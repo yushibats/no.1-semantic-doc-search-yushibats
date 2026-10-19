@@ -30,8 +30,9 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_data_wa
 
 # ウォレットZIPをローカルに保存（base64デコードしてバイナリで書き込み）
 resource "local_file" "wallet_zip" {
-  content_base64 = oci_database_autonomous_database_wallet.generated_autonomous_data_warehouse_wallet.content
-  filename       = "${path.module}/wallet_full.zip"
+  content_base64  = oci_database_autonomous_database_wallet.generated_autonomous_data_warehouse_wallet.content
+  filename        = "${path.module}/wallet_full.zip"
+  file_permission = "0600"
 }
 
 # 外部データソースでウォレットから個別ファイルを抽出（外部スクリプト使用）

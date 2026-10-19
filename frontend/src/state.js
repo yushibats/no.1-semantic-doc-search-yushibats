@@ -122,8 +122,6 @@ export const appState = new StateManager({
   loginUser: localStorage.getItem('loginUser'),
   debugMode: false,
   requireLogin: true,  // 初期値はtrue、loadConfig()でバックエンド設定に更新
-  enableTextRag: false,
-  searchMode: 'image',
   
   // ファイル管理
   selectedFile: null,
@@ -131,7 +129,7 @@ export const appState = new StateManager({
   
   // AI Assistant関連
   copilotOpen: false,
-  copilotExpanded: false,
+  copilotExpanded: true,
   copilotMessages: [],
   copilotLoading: false,
   copilotImages: [],
@@ -166,6 +164,8 @@ export const appState = new StateManager({
   ociObjectsFilterPageImages: 'all',
   ociObjectsFilterEmbeddings: 'all',
   ociObjectsDisplayType: 'files_only', // 'files_only' | 'files_and_images'
+  ociObjectsPageImageRelease: 'serving', // 'draft' | 'serving'
+  pipelineJobIds: [],
 });
 
 // ========================================

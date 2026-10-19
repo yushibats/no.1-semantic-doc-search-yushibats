@@ -7,10 +7,8 @@ data "oci_core_subnet" "selected_compute_subnet" {
   subnet_id = var.compute_subnet_id
 }
 
-data "template_file" "cloud_init_file" {
-  template = file("./cloud_init/bootstrap.template.yaml")
-
-  vars = {
+locals {
+  cloud_init_content = templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
     comp_id                   = var.compartment_ocid
     bucket                    = var.oci_bucket_name
     dify_bucket               = var.dify_bucket_name
@@ -30,20 +28,20 @@ data "template_file" "cloud_init_file" {
     external_api_keys         = var.external_api_keys
     show_ai_assistant         = var.show_ai_assistant
     show_search_tab           = var.show_search_tab
-    enable_text_rag           = tostring(var.enable_text_rag)
-    search_mode               = var.search_mode
     compute_subnet_is_private = tostring(local.compute_subnet_prohibits_public_ip)
-  }
+    source_repository_url     = var.source_repository_url
+    source_revision           = var.source_revision
+  })
 }
 
 
-data "template_cloudinit_config" "cloud_init" {
+data "cloudinit_config" "cloud_init" {
   gzip          = true
   base64_encode = true
 
   part {
     filename     = "bootstrap.yaml"
     content_type = "text/cloud-config"
-    content      = data.template_file.cloud_init_file.rendered
+    content      = local.cloud_init_content
   }
 }

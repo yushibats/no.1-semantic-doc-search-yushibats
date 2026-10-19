@@ -16,6 +16,14 @@ import {
 import {
   loadOciSettings,
 } from './src/modules/oci.js';
+import { loadRerankSettings, loadRetrievalSettings } from './src/modules/retrieval-settings.js';
+import { restorePipelineJobs } from './src/modules/pipeline.js';
+import { loadDynamicSearchFilters } from './src/modules/search.js';
+import {
+  loadDocumentLibrary,
+  startDraftIngest
+} from './src/modules/document-library.js';
+import { loadMetadataSettings } from './src/modules/metadata-settings.js';
 import { UPLOAD_CONFIG } from './src/config.js';
 // DB関連機能はdocument.jsモジュールに移動済み
 import { 
@@ -36,6 +44,9 @@ import {
   testDbConnection,
   loadDbInfo,
   loadDbTables,
+  loadSystemTableStatus,
+  refreshSystemTableStatus,
+  initializeSystemTables,
   toggleTablePreview,
   loadTableData,
   escapeHtml,
@@ -125,10 +136,15 @@ async function switchTab(tabName, event) {
   if (mainTabsContainer) {
     mainTabsContainer.querySelectorAll('.apex-tab').forEach(tab => {
       tab.classList.remove('active');
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
     });
   }
-  if (event && event.target) {
-    event.target.classList.add('active');
+  const selectedTab = event?.currentTarget || event?.target?.closest('[role="tab"]');
+  if (selectedTab) {
+    selectedTab.classList.add('active');
+    selectedTab.setAttribute('aria-selected', 'true');
+    selectedTab.tabIndex = 0;
   }
   
   // サブタブの表示/非表示
@@ -143,7 +159,7 @@ async function switchTab(tabName, event) {
     if (firstSubTab) {
       firstSubTab.classList.add('active');
     }
-    const subTabEvent = { target: firstSubTab };
+    const subTabEvent = { currentTarget: firstSubTab, target: firstSubTab };
     await switchAdminSubTab('database', subTabEvent);
   } else {
     adminSubTabs.style.display = 'none';
@@ -175,6 +191,9 @@ async function switchTab(tabName, event) {
   // 注: 文書管理タブの自動刷新は無効(🔄 更新ボタンで手動刷新)
   // adminタブの初期化はswitchAdminSubTabで処理
   // 注: settings/databaseタブは廃止され、adminサブタブに統合されたため、ここでは何もしない
+  if (tabName === 'documents') {
+    await loadDocumentLibrary();
+  }
 }
 
 /**
@@ -187,9 +206,14 @@ async function switchAdminSubTab(subTabName, event) {
   const adminSubTabs = document.getElementById('adminSubTabs');
   adminSubTabs.querySelectorAll('.apex-tab').forEach(tab => {
     tab.classList.remove('active');
+    tab.setAttribute('aria-selected', 'false');
+    tab.tabIndex = -1;
   });
-  if (event && event.target) {
-    event.target.classList.add('active');
+  const selectedTab = event?.currentTarget || event?.target?.closest('[role="tab"]');
+  if (selectedTab) {
+    selectedTab.classList.add('active');
+    selectedTab.setAttribute('aria-selected', 'true');
+    selectedTab.tabIndex = 0;
   }
   
   // タブコンテンツの表示切り替え
@@ -217,10 +241,15 @@ async function switchAdminSubTab(subTabName, event) {
   
   // サブタブに応じた初期化処理
   try {
-    if (subTabName === 'settings') {
+    if (subTabName === 'retrieval') {
+      console.log('Loading retrieval and indexing settings...');
+      utilsShowLoading('検索・索引設定を読み込み中...');
+      await Promise.all([loadRetrievalSettings(), loadMetadataSettings()]);
+      utilsHideLoading();
+    } else if (subTabName === 'settings') {
       console.log('Loading OCI settings...');
       utilsShowLoading('OCI設定を読み込み中...');
-      await loadOciSettings();
+      await Promise.all([loadOciSettings(), loadRerankSettings()]);
       utilsHideLoading();
       console.log('OCI settings loaded');
     } else if (subTabName === 'database') {
@@ -233,7 +262,15 @@ async function switchAdminSubTab(subTabName, event) {
         const existingWarnings = dbContent.querySelectorAll('.bg-yellow-50.border-yellow-400');
         existingWarnings.forEach(warning => warning.remove());
       }
-      
+
+      // ADB OCIDは.envから読み込むだけでDB起動不要。
+      // DB接続読み込みがタイムアウトしても必ず表示されるよう、先に取得する
+      try {
+        await loadAdbOcidOnly();
+      } catch (error) {
+        console.warn('ADB OCID取得エラー（スキップ）:', error);
+      }
+
       try {
         await loadDbConnectionSettings();
       } catch (error) {
@@ -278,13 +315,10 @@ async function switchAdminSubTab(subTabName, event) {
         utilsShowToast(`設定の読み込みに失敗しました: ${error.message}`, 'error');
         return;
       }
-      
-      // ADB OCIDのみを自動取得（Display NameやLifecycle Stateは取得しない）
-      try {
-        await loadAdbOcidOnly();
-      } catch (error) {
-        console.warn('ADB OCID取得エラー（スキップ）:', error);
-      }
+
+      await loadSystemTableStatus();
+
+      // ADB OCIDは上で取得済み
       // .envからDB接続情報を自動取得（ユーザー名、パスワード、DSN）
       try {
         await loadDbConnectionInfoFromEnv();
@@ -304,55 +338,6 @@ async function switchAdminSubTab(subTabName, event) {
     utilsShowToast(`設定の読み込みに失敗しました: ${error.message}`, 'error');
   }
 }
-
-// ========================================
-// ページ画像化されたファイルの判定
-// ※ 移動先: src/modules/document.js
-// ========================================
-
-// /**
-//  * ページ画像化で生成されたファイルかどうかを判定
-//  * 構造: 親ファイル名/page_001.png, 親ファイル名/page_002.png ...
-//  * 例: "example.pdf" → "example/page_001.png"
-//  * 
-//  * @param {string} objectName - オブジェクト名
-//  * @param {Array} allObjects - 全オブジェクトのリスト（親ファイルの存在確認用）
-//  * @returns {boolean} ページ画像化されたファイルの場合true
-//  */
-// function isGeneratedPageImage(objectName, allObjects = appState.get('allOciObjects')) {
-//   // page_001.pngのパターンにマッチするかチェック
-//   if (!/\/page_\d{3}\.png$/.test(objectName)) {
-//     return false;
-//   }
-//    
-//   // 親ファイル名を抽出（例: "example/page_001.png" → "example"）
-//   const lastSlashIndex = objectName.lastIndexOf('/');
-//   if (lastSlashIndex === -1) {
-//     // ルート直下のpage_001.pngはページ画像化されたファイルではない
-//     return false;
-//   }
-//   
-//   const parentFolderPath = objectName.substring(0, lastSlashIndex);
-//   
-//   // 親フォルダと同名のファイルが存在するかチェック
-//   // 例: "example/page_001.png" の場合、"example", "example.pdf", "example.pptx" などが存在すればページ画像化されたファイル
-//   const parentFileExists = allObjects.some(obj => {
-//     // フォルダを除外
-//     if (obj.name.endsWith('/')) {
-//       return false;
-//     }
-//     
-//     // 拡張子を除いたファイル名を比較
-//     const objNameWithoutExt = obj.name.replace(/\.[^.]+$/, '');
-//     return objNameWithoutExt === parentFolderPath;
-//   });
-//   
-//   return parentFileExists;
-// }
-// src/modules/document.jsのisGeneratedPageImage関数を使用
-const isGeneratedPageImage = (objectName, allObjects) => {
-  return window.ociModule?.isGeneratedPageImage?.(objectName, allObjects) ?? false;
-};
 
 // 複数ファイルアップロード用の状態管理
 let selectedMultipleFiles = [];
@@ -478,7 +463,7 @@ function clearMultipleFileSelection() {
   document.getElementById('fileInputMultiple').value = '';
   document.getElementById('uploadMultipleBtn').disabled = true;
   document.getElementById('selectedFilesList').style.display = 'none';
-  document.getElementById('uploadProgress').style.display = 'none';
+  hideUploadProgressUI();
 }
 
 /**
@@ -503,48 +488,19 @@ async function uploadMultipleDocuments() {
     return;
   }
   
+  const uploadBtn = document.getElementById('uploadMultipleBtn');
   try {
-    // ボタンを無効化
-    const uploadBtn = document.getElementById('uploadMultipleBtn');
     uploadBtn.disabled = true;
-    
-    // 選択されたファイルリストを非表示
-    const selectedFilesList = document.getElementById('selectedFilesList');
-    if (selectedFilesList) {
-      selectedFilesList.style.display = 'none';
-    }
-    
-    // 進捗表示UIを初期化
-    showUploadProgressUI(selectedMultipleFiles);
-    
-    // FormDataを作成
-    const formData = new FormData();
-    selectedMultipleFiles.forEach(file => {
-      formData.append('files', file);
-    });
-    
-    // API呼び出し（SSE）
-    const response = await authFetchWithAuth('/ai/api/documents/upload/multiple', {
-      method: 'POST',
-      body: formData
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: `HTTP error! status: ${response.status}` }));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-    }
-    
-    // SSEストリーミング処理
-    await processUploadStreamingResponse(response, selectedMultipleFiles.length);
-    
+    await startDraftIngest([...selectedMultipleFiles]);
+    selectedMultipleFiles = [];
+    document.getElementById('fileInputMultiple').value = '';
+    document.getElementById('selectedFilesList').style.display = 'none';
+    utilsShowToast('一時保存と分類候補の作成が完了しました。確認表を確認してください', 'success');
   } catch (error) {
     console.error('アップロードエラー:', error);
-    hideUploadProgressUI();
-    const uploadBtn = document.getElementById('uploadMultipleBtn');
-    if (uploadBtn) {
-      uploadBtn.disabled = false;
-    }
     utilsShowToast(`アップロードに失敗しました: ${error.message}`, 'error');
+  } finally {
+    uploadBtn.disabled = selectedMultipleFiles.length === 0;
   }
 }
 
@@ -553,7 +509,10 @@ async function uploadMultipleDocuments() {
  */
 function showUploadProgressUI(files) {
   const progressDiv = document.getElementById('uploadProgress');
-  progressDiv.style.display = 'block';
+  if (!progressDiv) return;
+  progressDiv.hidden = false;
+  progressDiv.open = true;
+  progressDiv.style.borderLeft = '4px solid #3b82f6';
   
   const filesArray = Array.from(files);
   const totalFiles = filesArray.length;
@@ -572,36 +531,24 @@ function showUploadProgressUI(files) {
             </div>
             <span id="upload-progress-percent-${index}" class="text-xs font-semibold text-gray-600" style="min-width: 40px;">0%</span>
           </div>
-          <div id="upload-status-${index}" class="text-xs text-gray-500 mt-1"></div>
+          <div id="upload-status-${index}" class="text-xs text-gray-500 mt-1" aria-live="polite"></div>
         </div>
       </div>
     `;
   });
   
   progressDiv.innerHTML = `
-    <div class="bg-white border-2 border-blue-400 rounded-lg p-4" style="margin-bottom: 16px;">
-      <div class="mb-3 pb-3 border-b border-gray-200 flex items-center justify-between">
-        <div>
-          <div class="text-base font-bold text-gray-800 mb-1">オブジェクト・ストアにファイルをアップロード中</div>
-          <div class="text-xs text-gray-600">選択されたファイル: ${totalFiles}件</div>
-        </div>
-        <button 
-          id="closeUploadProgressBtn" 
-          onclick="closeUploadProgress()" 
-          class="text-gray-400 hover:text-gray-600 transition-colors" 
-          style="display: none; font-size: 24px; line-height: 1; padding: 4px;"
-          title="閉じる"
-        >
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      
+    <summary>
+      <span><i class="fas fa-cloud-upload-alt"></i> オブジェクト・ストアにファイルをアップロード中</span>
+      <small>選択されたファイル: ${totalFiles}件</small>
+    </summary>
+    <div class="retrieval-global-content">
       <div id="upload-files-container" style="max-height: 400px; overflow-y: auto;">
         ${filesHtml}
       </div>
       
       <div class="mt-3 pt-3 border-t border-gray-200">
-        <div id="upload-overall-status" class="text-sm font-semibold text-gray-700">準備中...</div>
+        <div id="upload-overall-status" class="text-sm font-semibold text-gray-700" aria-live="polite">準備中...</div>
       </div>
     </div>
   `;
@@ -613,7 +560,8 @@ function showUploadProgressUI(files) {
 function hideUploadProgressUI() {
   const progressDiv = document.getElementById('uploadProgress');
   if (progressDiv) {
-    progressDiv.style.display = 'none';
+    progressDiv.hidden = true;
+    progressDiv.open = false;
   }
 }
 
@@ -638,6 +586,7 @@ async function processUploadStreamingResponse(response, totalFiles) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
+  const streamStartedAt = Date.now();
   
   let currentFileIndex = 0;
   let successCount = 0;
@@ -667,6 +616,21 @@ async function processUploadStreamingResponse(response, totalFiles) {
           updateFileUploadStatus(data.file_index - 1, 'アップロード中...', 50);
           break;
           
+        case 'heartbeat': {
+          const fileIndex = data.file_index || currentFileIndex;
+          const elapsedSeconds = Number.isFinite(Number(data.elapsed_seconds))
+            ? Number(data.elapsed_seconds)
+            : Math.round((Date.now() - streamStartedAt) / 1000);
+          const elapsedLabel = `${Math.max(0, Math.round(elapsedSeconds))}秒経過`;
+          if (fileIndex > 0) {
+            updateFileUploadStatus(fileIndex - 1, `アップロード中... ${elapsedLabel}`, 50);
+            updateUploadOverallStatus(`ファイル ${fileIndex}/${data.total_files || totalFiles} をアップロード中... ${elapsedLabel}`);
+          } else {
+            updateUploadOverallStatus(`アップロード中... ${elapsedLabel}`);
+          }
+          break;
+        }
+          
         case 'file_complete':
           successCount++;
           updateFileUploadStatus(data.file_index - 1, '完了', 100, true);
@@ -689,16 +653,13 @@ async function processUploadStreamingResponse(response, totalFiles) {
           
           // 成功時のトースト
           if (data.success) {
-            utilsShowToast(`${data.success_count}件のファイルアップロードが完了しました。<br />一覧に反映するには、登録済み文書の「再取得」を押してください。`, 'success');
+            utilsShowToast(`${data.success_count}件のファイルアップロードが完了しました。<br />一覧に反映するには、登録済み文書の「更新」を押してください。`, 'success');
           } else {
             utilsShowToast(data.message, 'warning');
           }
           
-          // 閉じるボタンを表示
-          const closeBtn = document.getElementById('closeUploadProgressBtn');
-          if (closeBtn) {
-            closeBtn.style.display = 'block';
-          }
+          const progressDiv = document.getElementById('uploadProgress');
+          if (progressDiv) progressDiv.open = false;
           
           const uploadBtn = document.getElementById('uploadMultipleBtn');
           if (uploadBtn) {
@@ -779,19 +740,24 @@ function updateFileUploadStatus(fileIndex, status, progress, isSuccess = false, 
   
   // 色の変更
   if (isSuccess) {
-    fileDiv.classList.remove('bg-gray-50', 'border-gray-200', 'bg-red-50', 'border-red-200');
+    fileDiv.classList.remove('bg-gray-50', 'border-gray-200', 'bg-red-50', 'border-red-200', 'progress-active');
+    fileDiv.setAttribute('aria-busy', 'false');
     fileDiv.classList.add('bg-green-50', 'border-green-200');
     progressBar.classList.remove('bg-blue-500', 'bg-red-500');
     progressBar.classList.add('bg-green-500');
     statusDiv.classList.remove('text-gray-500', 'text-red-600');
     statusDiv.classList.add('text-green-600');
   } else if (isError) {
-    fileDiv.classList.remove('bg-gray-50', 'border-gray-200', 'bg-green-50', 'border-green-200');
+    fileDiv.classList.remove('bg-gray-50', 'border-gray-200', 'bg-green-50', 'border-green-200', 'progress-active');
+    fileDiv.setAttribute('aria-busy', 'false');
     fileDiv.classList.add('bg-red-50', 'border-red-200');
     progressBar.classList.remove('bg-blue-500', 'bg-green-500');
     progressBar.classList.add('bg-red-500');
     statusDiv.classList.remove('text-gray-500', 'text-green-600');
     statusDiv.classList.add('text-red-600');
+  } else if (status) {
+    fileDiv.classList.add('progress-active');
+    fileDiv.setAttribute('aria-busy', 'true');
   }
 }
 
@@ -900,15 +866,7 @@ function getChildObjects(folderName) {
  * 文書一覧を更新(通知付き)
  */
 window.refreshDocumentsWithNotification = async function() {
-  try {
-    utilsShowLoading('文書一覧を再取得中...');
-    await loadOciObjects();
-    utilsHideLoading();
-    utilsShowToast('文書一覧を再取得しました', 'success');
-  } catch (error) {
-    utilsHideLoading();
-    utilsShowToast(`文書一覧の再取得に失敗しました: ${error.message}`, 'error');
-  }
+  await loadDocumentLibrary({ notification: true });
 }
 
 
@@ -1113,16 +1071,6 @@ const clearAllOciObjects = () => { window.ociModule?.clearAll?.(); };
 // };
 // src/modules/document.jsのdownloadSelectedOciObjects関数を使用
 window.downloadSelectedOciObjects = () => { window.ociModule?.downloadSelected?.(); };
-
-/**
- * 選択されたOCIオブジェクトをページ毎に画像化
- * ※ 移動先: src/modules/document.js
- */
-// window.convertSelectedOciObjectsToImages = async function() {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// };
-// src/modules/document.jsのconvertSelectedOciObjectsToImages関数を使用
-window.convertSelectedOciObjectsToImages = () => { window.ociModule?.convertToImages?.(); };
 
 /**
  * 選択されたOCIオブジェクトをベクトル化してDBに保存
@@ -1332,7 +1280,7 @@ async function deleteDocument(documentId, filename) {
     `文書「${filename}」を削除してもよろしいですか?
 
 ※以下のデータも削除されます:
-- データベース内のレコード（FILE_INFO, IMG_EMBEDDINGS）
+- データベース内のレコード（SDS_FILES, SDS_IMAGE_EMBEDDINGS）
 - 生成された画像ファイル
 - Object Storageのファイル
 
@@ -1632,6 +1580,33 @@ window.addEventListener('DOMContentLoaded', async () => {
   
   // ログイン状態を確認
   await authCheckLoginStatus();
+
+  // 認証済み、またはログイン不要のデバッグモードでのみ検索条件を取得する
+  if (appState.get('isLoggedIn') || !appState.get('requireLogin')) {
+    await loadDynamicSearchFilters();
+    await restorePipelineJobs();
+  }
+
+  // ADB OCIDを起動直後（DB操作前でバックエンドがアイドルなうち）に一度取得しておく。
+  // これにより、後でDB管理タブを開いた際に接続プール初期化でブロックされても
+  // OCIDは既に表示済みとなり、DB停止時でも必ず表示される。
+  loadAdbOcidOnly().catch(err => console.warn('ADB OCID初期取得スキップ:', err));
+
+  ['mainTabs', 'adminSubTabs', 'searchTypeTabs'].forEach(id => {
+    const tabList = document.getElementById(id);
+    tabList?.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const tabs = [...tabList.querySelectorAll('[role="tab"]:not([disabled])')];
+      const currentIndex = tabs.indexOf(document.activeElement);
+      if (currentIndex < 0 || tabs.length === 0) return;
+      event.preventDefault();
+      const nextIndex = event.key === 'Home' ? 0
+        : event.key === 'End' ? tabs.length - 1
+          : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[nextIndex].focus();
+      tabs[nextIndex].click();
+    });
+  });
   
   // console.log('資料見つかるくん - 初期化完了');
 });
@@ -1655,20 +1630,23 @@ let currentAdbInfo = {
  */
 async function loadAdbOcidOnly() {
   try {
+    // OCIDは.envを読むだけでDB起動不要。ただしDB接続プール初期化中はバックエンドが
+    // 一時的にブロックされるため、既定10秒では取りこぼす。タイムアウトを延長する。
     const data = await authApiCall('/ai/api/database/target/ocid', {
-      method: 'GET'
+      method: 'GET',
+      timeout: 30000
     });
     
     if (data.success && data.ocid) {
       // OCIDのみを表示
       document.getElementById('adbOcid').textContent = data.ocid;
       console.log('ADB OCIDを読み込みました:', data.ocid);
-    } else {
-      document.getElementById('adbOcid').textContent = '-';
     }
+    // 失敗時は既存の表示（初期化時に取得済みのOCID等）を上書きしない。
+    // HTMLの初期値は '-' なので、一度も取得できていなければ '-' のまま。
   } catch (error) {
     console.error('ADB OCID読み込みエラー:', error);
-    document.getElementById('adbOcid').textContent = '-';
+    // タイムアウト等で失敗しても、既に表示済みのOCIDは維持する（'-'で上書きしない）
   }
 }
 
@@ -1957,6 +1935,8 @@ window.refreshDbInfo = refreshDbInfo;
 window.refreshDbStorage = refreshDbStorage;
 window.handleWalletFileSelect = handleWalletFileSelect;
 window.loadDbStorage = loadDbStorage;
+window.refreshSystemTableStatus = refreshSystemTableStatus;
+window.initializeSystemTables = initializeSystemTables;
 
 // テーブル一覧ページング関連関数をグローバルスコープに公開
 window.handleDbTablesPrevPage = handleDbTablesPrevPage;
