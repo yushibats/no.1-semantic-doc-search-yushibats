@@ -818,20 +818,6 @@ def update_search_concept_settings(
         _raise_api_error(error)
 
 
-@router.patch(
-    "/settings/search-concepts/bulk-status",
-    response_model=list[SearchConcept],
-)
-def update_search_concept_statuses(
-    payload: SearchConceptBulkStatusUpdate,
-) -> list[SearchConcept]:
-    try:
-        return document_metadata_repository.update_search_concept_statuses(
-            payload
-        )
-    except Exception as error:
-        _raise_api_error(error)
-
 
 @router.patch(
     "/settings/search-concepts/{concept_id}", response_model=SearchConcept

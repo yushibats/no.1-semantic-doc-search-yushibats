@@ -12,7 +12,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 revision = "a" * 40
-repository = "https://github.com/yushibats/no.1-semantic-doc-search-yushibats.git"
+repository = "https://github.com/example/semantic-doc-search.git"
 password = 'Fixture-only: "quotes" # spaces & symbols'
 values = {
     "db_conn": base64.b64encode(gzip.compress(b"fixture-connection")).decode(),

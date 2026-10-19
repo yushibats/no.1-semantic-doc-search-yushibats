@@ -120,7 +120,7 @@ async function sendCopilotMessage() {
   
   try {
     // API呼び出しでストリーミング受信
-    // トークンを確認（localStorageから直接取得 - referenceプロジェクトに準拠）
+    // localStorageの認証トークンを付与する。
     const loginToken = localStorage.getItem('loginToken');
     const response = await fetch('/ai/api/copilot/chat', {
       method: 'POST',
@@ -137,7 +137,7 @@ async function sendCopilotMessage() {
     });
     
     if (!response.ok) {
-      // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+      // 401応答時は認証状態を破棄する。
       if (response.status === 401) {
         const { forceLogout: authForceLogout } = await import('./auth.js');
         const requireLogin = appState.get('requireLogin');

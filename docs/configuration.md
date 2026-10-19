@@ -1,6 +1,8 @@
 # 設定項目
 
 ルートの`.env.example`を`.env`にコピーし、各自の環境に合わせます。
+OCIスタックはアプリとOracle Clientを`/u01/aipoc`配下へ配置します。
+これは新規VM用の配置規約で、ローカル起動スクリプトはリポジトリ位置からパスを解決します。
 設定画面から保存した値もこの`.env`に保存されます。実際の`.env`はGit管理しません。
 `.env`はdotenv形式であり、シェルの`source .env`では読み込みません。
 
@@ -9,7 +11,7 @@
 | `ORACLE_26AI_CONNECTION_STRING` | `ユーザー/パスワード@接続サービス名`形式のDB接続。新規OCI導入では自動設定 |
 | `ORACLE_CLIENT_LIB_DIR` / `TNS_ADMIN` | Oracle ClientとWallet。ローカル開発では自分の配置先を指定 |
 | `ADB_OCID` / `ADB_REGION` | ADBの操作対象。リージョン未指定時はOCIDから判定 |
-| `OCI_CONFIG_FILE` / `OCI_PROFILE` / `OCI_KEY_FILE` | 自分のOCI認証設定と秘密鍵。画面で設定する場合はそちらを使用 |
+| `OCI_CONFIG_FILE` / `OCI_PROFILE` / `OCI_KEY_FILE` | 自分のOCI認証設定と秘密鍵。パス未指定時は`~/.oci/config`と同じディレクトリの鍵を使用 |
 | `OCI_COMPARTMENT_OCID` | アプリが使用するOCIリソースのコンパートメント |
 | `OCI_BUCKET` / `OCI_NAMESPACE` | 文書用Object StorageのバケットとNamespace |
 | `OCI_REGION_DEPLOY` | Object Storage等のデプロイ先リージョン |

@@ -12,15 +12,12 @@ Oracle Database接続とクエリ実行を管理するサービスです。
 - テーブル情報の取得と管理
 """
 import asyncio
-import json
 import logging
 import os
 import re
 import shutil
 import zipfile
-from concurrent.futures import ThreadPoolExecutor  # 必要に応じて使用
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -70,7 +67,6 @@ STORAGE_PATH = Path(os.getenv("STORAGE_PATH", "./storage"))
 # oracledbモジュールのインポート（オプション）
 try:
     import oracledb
-    import platform
     ORACLEDB_AVAILABLE = True
     
     # Thin modeを使用（Oracle Clientは不要）
@@ -79,14 +75,14 @@ except ImportError:
     ORACLEDB_AVAILABLE = False
 
 
-# Thin modeでは init_oracle_client() は不要（削除済み）
+# Thin modeではinit_oracle_client()を呼び出さない。
 
 
 def _execute_db_operation(func_name: str, **kwargs) -> Dict[str, Any]:
     """
     データベース操作を実行（接続テスト用）
     
-    参照プロジェクト（No.1-SQL-Assist）の実装に基づくシンプルな接続方式
+    接続プールを使わない疎通確認用の接続方式
     
     Args:
         func_name: 操作名 ('test_connection')
@@ -239,7 +235,7 @@ def _execute_db_operation(func_name: str, **kwargs) -> Dict[str, Any]:
                 if connection:
                     try:
                         connection.close()
-                    except:
+                    except Exception:
                         pass
                 
                 # リトライ
@@ -248,7 +244,7 @@ def _execute_db_operation(func_name: str, **kwargs) -> Dict[str, Any]:
                     time.sleep(retry_delay)
         
         # 全リトライ失敗
-        logger.error(f"========== 接続テスト完了: 失敗 ==========")
+        logger.error("========== 接続テスト完了: 失敗 ==========")
         error_msg = str(last_error) if last_error else '不明なエラー'
         
         # ユーザー向けのエラーメッセージを生成
@@ -358,6 +354,9 @@ class DatabaseService:
         Returns:
             bool: 接続が有効な場合True
         """
+        if not ORACLEDB_AVAILABLE:
+            return False
+
         try:
             if not self._ensure_pool_initialized():
                 logger.debug("接続状態チェック: プール未初期化")
@@ -495,7 +494,7 @@ class DatabaseService:
             
             elapsed = time.time() - start_time
             logger.info(f"  <<< oracledb.connect()完了 ({elapsed:.2f}秒)")
-            logger.info(f"  ✔ 接続成功")
+            logger.info("  ✔ 接続成功")
             
             # Step 5: 接続テスト
             logger.info("[Step 5] 接続テスト")
@@ -915,7 +914,7 @@ class DatabaseService:
             
             return {
                 "success": True,
-                "message": f"Walletをアップロードしました",
+                "message": "Walletをアップロードしました",
                 "wallet_location": wallet_location,
                 "available_services": available_services
             }
@@ -1076,7 +1075,7 @@ class DatabaseService:
                 logger.error(f"接続テストがタイムアウトしました ({CONNECTION_TIMEOUT}秒)")
                 return {
                     "success": False,
-                    "message": f"接続テストがタイムアウトしました。データベースが起動していない可能性があります。"
+                    "message": "接続テストがタイムアウトしました。データベースが起動していない可能性があります。"
                 }
             except Exception as e:
                 error_str = str(e)
@@ -1372,7 +1371,7 @@ class DatabaseService:
                                     row_data.append(f"{ascii_repr}...")
                                 else:
                                     row_data.append(ascii_repr if ascii_repr else f"<BLOB: {len(value)} bytes>")
-                            except:
+                            except Exception:
                                 row_data.append(f"<BLOB: {len(value)} bytes>")
                         elif hasattr(value, 'read'):
                             # LOBオブジェクト（CLOB, BLOB等）
@@ -1388,7 +1387,7 @@ class DatabaseService:
                                     else:
                                         row_data.append(lob_str)
                             except Exception as lob_err:
-                                row_data.append(f"<LOB: 読み取りエラー>")
+                                row_data.append("<LOB: 読み取りエラー>")
                                 logger.warning(f"LOB読み取りエラー: {lob_err}")
                         else:
                             # その他の型は文字列に変換
@@ -1490,9 +1489,9 @@ class DatabaseService:
                 logger.error("データベース接続に失敗しました")
                 return {"success": False, "deleted_count": 0, "message": "データベース接続に失敗しました", "errors": []}
             
-            logger.info(f"DB接続プールから接続取得中...")
+            logger.info("DB接続プールから接続取得中...")
             with self.pool_manager.acquire_connection() as connection:
-                logger.info(f"DB接続成功")
+                logger.info("DB接続成功")
                 cursor = connection.cursor()
                 
                 for file_id in file_ids:
@@ -1533,7 +1532,7 @@ class DatabaseService:
                 # コミット
                 logger.info(f"COMMIT実行中... deleted_count={deleted_count}")
                 connection.commit()
-                logger.info(f"COMMIT成功")
+                logger.info("COMMIT成功")
                 cursor.close()
             
             result = {
@@ -1923,30 +1922,6 @@ class DatabaseService:
                 
         except Exception as e:
             logger.error(f".envファイル更新エラー: {e}")
-            return False
-    
-    def is_connected(self) -> bool:
-        """接続状態を確認（接続プール経由、既存メソッドの再利用）"""
-        # クラス内に既に接続プール経由のチェックメソッドがあるため、再利用
-        # (line 329-350の is_connected メソッドと重複)
-        if not ORACLEDB_AVAILABLE:
-            return False
-        
-        try:
-            if not self._ensure_pool_initialized():
-                logger.debug("接続状態チェック: プール未初期化")
-                return False
-            
-            # 簡単なクエリでテスト
-            with self.pool_manager.acquire_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT 1 FROM DUAL")
-                    cursor.fetchone()
-            
-            logger.debug("接続状態チェック: 接続有効")
-            return True
-        except Exception as e:
-            logger.warning(f"接続状態チェック: 接続無効 - {e}")
             return False
     
     def get_storage_info(self) -> Optional[Dict[str, Any]]:

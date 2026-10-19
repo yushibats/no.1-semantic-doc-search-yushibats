@@ -55,6 +55,18 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertEqual(first, (self.output / "semantic-doc-search-stack.zip").read_bytes())
         self.assertIn(hashlib.sha256(first).hexdigest(), (self.output / "SHA256SUMS").read_text())
 
+    def test_infers_repository_from_github_origin(self):
+        self.git("remote", "add", "origin", "git@github.com:example/inferred-repository.git")
+        result = release.package(self.root, self.output, "HEAD")
+        self.assertEqual(result["repository"], "example/inferred-repository")
+
+    def test_rejects_missing_or_non_github_origin(self):
+        with self.assertRaisesRegex(ValueError, "--repository"):
+            release.package(self.root, self.output, "HEAD")
+        self.git("remote", "add", "origin", "https://example.com/owner/repository.git")
+        with self.assertRaisesRegex(ValueError, "--repository"):
+            release.package(self.root, self.output, "HEAD")
+
     def test_rejects_uncommitted_changes(self):
         (self.root / "init_script.sh").write_text("uncommitted\n")
         with self.assertRaisesRegex(ValueError, "working tree"):

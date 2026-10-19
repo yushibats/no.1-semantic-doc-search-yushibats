@@ -254,7 +254,7 @@ function scheduleStatusRefresh() {
   if (!settings.profiles.some(profile => ['PENDING', 'PROCESSING'].includes(profile.apply_status))) return;
   statusTimer = setTimeout(async () => {
     try {
-      // ponytail: ポーリングはステータス表示のみ更新。全再描画すると開いた<details>や編集中の入力が消える
+      // 入力内容を保持するため、ポーリングではステータス表示だけを更新する。
       const latest = await api();
       settings.profiles = settings.profiles.map(profile => {
         const fresh = latest.profiles.find(item => item.slot_no === profile.slot_no);

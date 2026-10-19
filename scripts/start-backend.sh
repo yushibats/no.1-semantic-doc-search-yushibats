@@ -29,21 +29,16 @@ fi
 
 # .envはpython-dotenvがアプリ側で読み込む。
 # シェルはexec前に必要なORACLE_CLIENT_LIB_DIRのみ抽出する。
-# ponytail: 全体sourceは.envの引用符/空白入り値で壊れるため、必要な1変数だけ読む
+# 全体をsourceすると引用符や空白を含む値を誤解釈するため、必要な1変数だけ読む。
 if [ -f "$ROOT_DIR/.env" ]; then
   ORACLE_CLIENT_LIB_DIR="${ORACLE_CLIENT_LIB_DIR:-$(awk -F= '$1 == "ORACLE_CLIENT_LIB_DIR" {sub(/^[^=]*=/, ""); value=$0} END {print value}' "$ROOT_DIR/.env")}"
   export ORACLE_CLIENT_LIB_DIR
 fi
 
 # Oracle Client環境変数を設定
-# 優先順位: 環境変数 TNS_ADMIN > /u01/aipoc/props/wallet > ORACLE_CLIENT_LIB_DIR/network/admin
-if [ -z "${TNS_ADMIN:-}" ]; then
-  # TNS_ADMINが未設定の場合
-  if [ -d "/u01/aipoc/props/wallet" ]; then
-    export TNS_ADMIN="/u01/aipoc/props/wallet"
-  elif [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
-    export TNS_ADMIN="${ORACLE_CLIENT_LIB_DIR}/network/admin"
-  fi
+# 優先順位: 環境変数 TNS_ADMIN > ORACLE_CLIENT_LIB_DIR/network/admin
+if [ -z "${TNS_ADMIN:-}" ] && [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
+  export TNS_ADMIN="${ORACLE_CLIENT_LIB_DIR}/network/admin"
 fi
 
 if [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ] && [ "$(uname -s)" != "Darwin" ]; then

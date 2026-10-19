@@ -64,9 +64,6 @@ logs/
 # OCI Config
 .oci/
 
-# Customized
-reference/
-
 # Backup files
 *.bak
 *.backup
@@ -78,11 +75,6 @@ backup/
 *.temp
 temp/
 tmp/
-
-# Documentation (generated or temporary)
-abc.md
-test_*.py
-!backend/tests/test_*.py
 
 # Presentation files
 *.pptx
@@ -113,4 +105,3 @@ examples/
 backend/backups/
 frontend/test-results/
 frontend/playwright-report/
-!scripts/tests/test_*.py

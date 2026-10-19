@@ -27,10 +27,9 @@ import shutil
 import subprocess
 import tempfile
 import time
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 
@@ -521,7 +520,7 @@ class ParallelProcessor:
         total_files = len(object_names)
         
         # ジョブ作成
-        job = await JobManager.create_job(job_id, total_files)
+        await JobManager.create_job(job_id, total_files)
         
         # 開始イベント
         yield {
@@ -929,7 +928,7 @@ class ParallelProcessor:
         total_files = len(object_names)
         
         # ジョブ作成
-        job = await JobManager.create_job(job_id, total_files)
+        await JobManager.create_job(job_id, total_files)
         
         # 開始イベント
         yield {
@@ -1927,7 +1926,7 @@ class ParallelProcessor:
         total_files = len(object_names)
         
         # ジョブ作成
-        job = await JobManager.create_job(job_id, total_files)
+        await JobManager.create_job(job_id, total_files)
         
         # 開始イベント
         yield {

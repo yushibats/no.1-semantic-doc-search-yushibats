@@ -250,11 +250,6 @@ export function displayOciObjectsList(data) {
     appState.set('ociBucketName', data.bucket_name);
   }
   
-  // デバッグログ
-  console.log('========== displayOciObjectsList ==========');
-  console.log('現在表示中のオブジェクト:', objects.map(o => o.name));
-  console.log('selectedOciObjects:', selectedOciObjects);
-  
   // 選択可能なオブジェクトをフィルタ
   const selectableObjects = objects;
   const allPageSelected = selectableObjects.length > 0 && selectableObjects.every(obj => selectedOciObjects.includes(obj.name));
@@ -1076,7 +1071,7 @@ export async function downloadSelectedOciObjects() {
     return;
   }
   
-  // トークンを確認（localStorageから直接取得 - referenceプロジェクトに準拠）
+  // localStorageの認証トークンを付与する。
   const loginToken = localStorage.getItem('loginToken');
   const debugMode = appState.get('debugMode');
   
@@ -1109,7 +1104,7 @@ export async function downloadSelectedOciObjects() {
     });
     
     if (!response.ok) {
-      // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+      // 401応答時は認証状態を破棄する。
       if (response.status === 401) {
         utilsHideLoading();
         appState.set('ociObjectsBatchDeleteLoading', false);
@@ -1204,14 +1199,8 @@ export async function deleteSelectedOciObjects() {
   
   // 処理中表示を設定
   appState.set('ociObjectsBatchDeleteLoading', true);
-  
-  console.log('🔴 Before showProcessProgressUI (delete):', selectedOciObjects);
-  
   // メインページに進捗UIを表示
   showProcessProgressUI(selectedOciObjects, 'delete');
-  
-  console.log('🔴 After showProcessProgressUI (delete)');
-  
   try {
     // SSEストリーミング対応のAPI呼び出し
     const loginToken = localStorage.getItem('loginToken');
@@ -1232,7 +1221,7 @@ export async function deleteSelectedOciObjects() {
     });
     
     if (!response.ok) {
-      // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+      // 401応答時は認証状態を破棄する。
       if (response.status === 401) {
         hideProcessProgressUI();
         appState.set('ociObjectsBatchDeleteLoading', false);
@@ -1279,8 +1268,6 @@ export async function deleteSelectedOciObjects() {
  * @returns {Promise<void>}
  */
 async function processStreamingResponse(response, totalFiles, operationType) {
-  console.log('🔴 processStreamingResponse called:', { totalFiles, operationType });
-  
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
@@ -1314,12 +1301,8 @@ async function processStreamingResponse(response, totalFiles, operationType) {
   
   // 削除・ベクトル化はメインページ進捗UIを使用
   const useProgressUI = operationType === 'delete' || operationType === 'vectorize';
-  
-  console.log('🔴 useProgressUI:', useProgressUI);
-  
   // メインページ進捗UIを使用する場合は、既存のローディングオーバーレイを確実に削除
   if (useProgressUI) {
-    console.log('🔴 Hiding loading overlay...');
     utilsHideLoading();
   }
   
@@ -1682,7 +1665,6 @@ async function processStreamingResponse(response, totalFiles, operationType) {
               
             case 'sync_complete':
               // すべての処理が完了し、状態が完全に同期された
-              console.log('同期完了イベント受信:', data);
               break;
               
             case 'complete':
@@ -1713,8 +1695,6 @@ async function processStreamingResponse(response, totalFiles, operationType) {
               } else if (operationType === 'delete') {
                 operationName = '削除';
               }
-              console.log(`${operationName}結果:`, data.results || data);
-              
               // 選択をクリアして一覧を更新（最終同期）
               appState.set('selectedOciObjects', []);
               // 短時間待機してからリストを更新（バックエンドの処理完了を保証）
@@ -1771,7 +1751,6 @@ function updateLoadingMessage(message, progress = null, jobId = null) {
   // メインページ進捗UIが表示されている場合は、ローディングオーバーレイを更新しない
   const processProgressDiv = document.getElementById('processProgress');
   if (processProgressDiv && !processProgressDiv.hidden) {
-    console.log('ℹ️ メインページ進捗UIが表示中のため、updateLoadingMessageをスキップ');
     return;
   }
   
@@ -1847,21 +1826,16 @@ let processJobId = null;
  * @param {string} operationType - 操作種別 ('delete' | 'vectorize')
  */
 function showProcessProgressUI(objectNames, operationType) {
-  console.log('✅ showProcessProgressUI called:', { objectNames, operationType });
-  
   // 既存のローディングオーバーレイを非表示にする
   utilsHideLoading();
   
   // 文書管理タブに切り替え（メインページに進捗UIを表示するため）
   const documentManagementTab = document.querySelector('[onclick="switchTab(\'documentManagement\')"]');
   if (documentManagementTab && !document.getElementById('documentManagement').classList.contains('active')) {
-    console.log('✅ Switching to documentManagement tab');
     documentManagementTab.click();
   }
   
   const progressDiv = document.getElementById('processProgress');
-  console.log('✅ progressDiv found:', progressDiv);
-  
   if (!progressDiv) {
     console.error('❌ processProgress element not found!');
     return;
@@ -1872,9 +1846,6 @@ function showProcessProgressUI(objectNames, operationType) {
   progressDiv.hidden = false;
   progressDiv.open = true;
   progressDiv.style.borderLeft = operationType === 'delete' ? '4px solid #ef4444' : '4px solid #2563eb';
-  
-  console.log('✅ progressDiv opened');
-  
   const totalFiles = objectNames.length;
   const operationLabel = operationType === 'delete' ? 'オブジェクトを削除中' : 'ファイルをベクトル化中';
   const operationIcon = operationType === 'delete' ? '<i class="fas fa-trash-alt"></i>' : '';
@@ -2166,7 +2137,6 @@ export async function refreshDbTables() {
  * @returns {Promise<void>}
  */
 export async function loadDbStorage() {
-  console.log('[DEBUG] db.jsのloadDbStorageが呼び出されました');
   try {
     utilsShowLoading('ストレージ情報を取得中...');
     
@@ -2305,7 +2275,6 @@ export async function loadDbStorage() {
  * @returns {Promise<void>}
  */
 export async function refreshDbStorage() {
-  console.log('[DEBUG] db.jsのrefreshDbStorageが呼び出されました');
   try {
     utilsShowLoading('ストレージ情報を再取得中...');
     await loadDbStorage();

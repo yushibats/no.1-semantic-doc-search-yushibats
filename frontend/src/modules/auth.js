@@ -71,11 +71,6 @@ function applyUIFeatureToggles(config) {
     } else {
       if (searchTab) searchTab.style.display = 'none';
       if (searchTabContent) searchTabContent.style.display = 'none';
-      // 検索タブが非表示の場合、文書管理タブに切り替え
-      if (searchTabElements.length > 1) {
-        // switchTab関数はapp.jsで定義されているため、ここではコメントアウト
-        // switchTab('documents', { target: searchTabElements[1] });
-      }
     }
   }
   
@@ -92,7 +87,6 @@ function applyUIFeatureToggles(config) {
  * @returns {Promise<void>}
  */
 export async function loadConfig() {
-  console.log('[AUTH.JS] loadConfig が呼び出されました');
   try {
     // API_BASEが空の場合は相対パス、設定されている場合は絶対パス
     const url = API_BASE ? `${API_BASE}/config` : '/ai/api/config';
@@ -107,11 +101,8 @@ export async function loadConfig() {
       
       // UI機能トグルを適用
       applyUIFeatureToggles(config);
-      
-      // console.log('設定を読み込みました:', config);
     }
   } catch (error) {
-    // console.warn('設定の読み込みに失敗しました:', error);
   }
 }
 
@@ -124,7 +115,6 @@ export async function loadConfig() {
  * ユーザー名入力フィールドにフォーカスを当てます。
  */
 export function showLoginModal() {
-  console.log('[AUTH.JS] showLoginModal が呼び出されました');
   const modal = document.getElementById('loginOverlay');
   if (modal) {
     modal.style.display = 'flex';
@@ -140,7 +130,6 @@ export function showLoginModal() {
  * 入力フォームとエラーメッセージをリセットします。
  */
 export function hideLoginModal() {
-  console.log('[AUTH.JS] hideLoginModal が呼び出されました');
   const modal = document.getElementById('loginOverlay');
   if (modal) {
     modal.style.display = 'none';
@@ -159,7 +148,6 @@ export function hideLoginModal() {
  * ログインパスワードの表示/非表示を切り替えます。
  */
 export function toggleLoginPassword() {
-  console.log('[AUTH.JS] toggleLoginPassword が呼び出されました');
   const input = document.getElementById('loginPassword');
   if (!input) return;
   input.type = input.type === 'password' ? 'text' : 'password';
@@ -170,9 +158,8 @@ export function toggleLoginPassword() {
   }
   try {
     input.setSelectionRange(input.value.length, input.value.length);
-  } catch (error) {
-    // Safariではtype切替直後にキャレット指定で例外になる場合がある
-    console.debug('[AUTH.JS] setSelectionRange skipped:', error);
+  } catch {
+    // Safariではtype切替直後にキャレット指定できない場合がある。
   }
 }
 
@@ -189,7 +176,6 @@ export function toggleLoginPassword() {
  * @returns {Promise<void>}
  */
 export async function handleLogin(event) {
-  console.log('[AUTH.JS] handleLogin が呼び出されました');
   event.preventDefault();
   
   const username = document.getElementById('loginUsername').value.trim();
@@ -287,7 +273,6 @@ export async function handleLogin(event) {
  * @returns {Promise<void>}
  */
 export async function handleLogout() {
-  console.log('[AUTH.JS] handleLogout が呼び出されました');
   try {
     const loginToken = appState.get('loginToken');
     if (loginToken) {
@@ -331,7 +316,6 @@ export async function handleLogout() {
  * ログイン中はユーザー名を表示し、ログアウト中は非表示にします。
  */
 export function updateUserInfo() {
-  console.log('[AUTH.JS] updateUserInfo が呼び出されました');
   const userInfo = document.getElementById('userInfo');
   const userName = document.getElementById('userName');
   
@@ -354,7 +338,6 @@ export function updateUserInfo() {
  * @returns {Promise<void>}
  */
 export async function checkLoginStatus() {
-  console.log('[AUTH.JS] checkLoginStatus が呼び出されました');
   // ローカルストレージからトークンを取得
   const token = localStorage.getItem('loginToken');
   const user = localStorage.getItem('loginUser');
@@ -409,7 +392,6 @@ export async function checkLoginStatus() {
  * ユーザーに通知を表示し、ログインモーダルを開きます。
  */
 export function forceLogout() {
-  console.log('[AUTH.JS] forceLogout が呼び出されました');
   if (window.UIComponents && window.UIComponents.setSessionTimeoutToastMode) {
     window.UIComponents.setSessionTimeoutToastMode(true);
   }
@@ -514,7 +496,6 @@ export async function fetchWithAuth(endpoint, options = {}) {
  * @throws {Error} APIリクエストが失敗した場合、または認証エラーが発生した場合
  */
 export async function apiCall(endpoint, options = {}) {
-  console.log(`[AUTH.JS] apiCall が呼び出されました: ${endpoint}`);
   try {
     const response = await fetchWithAuth(endpoint, {
       ...options,
@@ -553,7 +534,7 @@ window.authModule = {
   loadConfig
 };
 
-// 個別関数も直接登録（後方互換性のため）
+// HTMLのインラインイベントハンドラから参照する関数を公開する。
 window.showLoginModal = showLoginModal;
 window.hideLoginModal = hideLoginModal;
 window.toggleLoginPassword = toggleLoginPassword;

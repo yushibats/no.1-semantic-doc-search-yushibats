@@ -2,8 +2,6 @@
 // グローバル変数（app.jsからの移行）
 let dbTablesPage = 1;
 
-// デバッグ用：db.jsの関数が呼び出されたことを示すフラグ
-console.log('[DEBUG] db.jsモジュールがロードされました');
 let dbTablesTotalPages = 1;
 let selectedDbTables = [];
 let dbTablesBatchDeleteLoading = false;
@@ -254,7 +252,7 @@ export async function uploadWalletFile(file) {
     const formData = new FormData();
     formData.append('file', file);
     
-    // トークンを確認（localStorageから直接取得 - referenceプロジェクトに準拠）
+    // localStorageの認証トークンを付与する。
     const loginToken = localStorage.getItem('loginToken');
     const headers = {};
     if (loginToken) {
@@ -271,7 +269,7 @@ export async function uploadWalletFile(file) {
     utilsHideLoading();
     
     if (!response.ok) {
-      // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+      // 401応答時は認証状態を破棄する。
       if (response.status === 401) {
         const { forceLogout: authForceLogout } = await import('./auth.js');
         const requireLogin = appState.get('requireLogin');
@@ -382,23 +380,10 @@ export async function testDbConnection() {
           password = envData.password;
         }
         utilsHideLoading();
-      } catch (error) {
+      } catch {
         utilsHideLoading();
-        // console.warn('環境変数からパスワード取得エラー:', error);
       }
     }
-    
-    // デバッグログ
-    // デバッグ情報（本番環境ではコメントアウト）
-    // console.log('=== 接続テスト情報 ===');
-    // console.log('Username:', username);
-    // console.log('Password length:', password ? password.length : 0);
-    // console.log('DSN:', dsn);
-    // console.log('Password exists:', !!password);
-    // console.log('Password from env:', !passwordField.value && !!password);
-    // console.log('=====================');
-    
-    // 入力チェック
     if (!username || !password || !dsn) {
       utilsShowToast('ユーザー名、パスワード、DSNを入力してください', 'warning');
       return;
@@ -413,9 +398,6 @@ export async function testDbConnection() {
         dsn: dsn
       }
     }
-    
-    // console.log('Request body:', JSON.stringify({...requestBody, settings: {...requestBody.settings, password: '[HIDDEN]'}}));
-    
     // タイムアウト処理を追加（20秒）- バックエンド側も15秒でタイムアウトする
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('接続テストがタイムアウトしました（20秒）')), 20000)
@@ -433,9 +415,6 @@ export async function testDbConnection() {
     
     if (data.success) {
       utilsShowToast(data.message, 'success');
-      
-      // 接続成功時、DB情報を自動読み込み
-      // await loadDbInfo();
     } else {
       utilsShowToast(data.message, 'error');
     }
@@ -1224,16 +1203,6 @@ export function toggleSelectAllTableData(checked) {
   }
 }
 
-// // グローバルスコープに公開（HTMLインラインイベントハンドラから呼び出せるように）
-// window.toggleTableDataRowSelection = toggleTableDataRowSelection;
-// window.toggleSelectAllTableData = toggleSelectAllTableData;
-// window.selectAllTableData = selectAllTableData;
-// window.clearAllTableData = clearAllTableData;
-// window.deleteSelectedTableData = deleteSelectedTableData;
-// window.refreshTableData = refreshTableData;
-// window.handleTableDataPrevPage = handleTableDataPrevPage;
-// window.handleTableDataNextPage = handleTableDataNextPage;
-// window.handleTableDataJumpPage = handleTableDataJumpPage;
 
 export function handleDbTablesPrevPage() {
   const currentPage = appState.get('dbTablesPage') || 1;

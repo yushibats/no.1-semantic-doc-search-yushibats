@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly PROJECT_ROOT="${PROJECT_ROOT:-/u01/aipoc/no.1-semantic-doc-search}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="${PROJECT_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 readonly BACKEND_PYTHON="${PROJECT_ROOT}/backend/.venv/bin/python"
+readonly LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/logs}"
 
 if [[ ! -x "${BACKEND_PYTHON}" ]]; then
   echo "バックエンドのPython環境が見つかりません: ${BACKEND_PYTHON}" >&2
@@ -38,20 +40,21 @@ fi
 
 readonly API_HOST_VALUE="${API_HOST:-0.0.0.0}"
 readonly API_PORT_VALUE="${API_PORT:-8081}"
+mkdir -p "${LOG_DIR}"
 
 echo "セマンティック文書検索バックエンドサービスを起動中..."
 (
   cd "${PROJECT_ROOT}/backend"
   nohup .venv/bin/python -m uvicorn app.main:app \
     --host "${API_HOST_VALUE}" --port "${API_PORT_VALUE}" \
-    > /var/log/app-backend.log 2>&1 &
+    > "${LOG_DIR}/app-backend.log" 2>&1 &
 )
 
 echo "セマンティック文書検索フロントエンドサービスを起動中..."
 (
   cd "${PROJECT_ROOT}/frontend"
   nohup npm run preview -- --host 0.0.0.0 --port 5175 \
-    > /var/log/app-frontend.log 2>&1 &
+    > "${LOG_DIR}/app-frontend.log" 2>&1 &
 )
 
 echo "セマンティック文書検索サービスの起動を開始しました。"

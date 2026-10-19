@@ -18,13 +18,11 @@ import logging
 import os
 import random
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import oci
 import oracledb
-from pdf2image import convert_from_path
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -151,7 +149,9 @@ class ImageVectorizer:
         """OCIクライアントのみを初期化（DB接続は遅延作成）"""
         try:
             # OCI設定を読み込み
-            config_file = os.path.expanduser("~/.oci/config")
+            config_file = os.path.expanduser(
+                os.getenv("OCI_CONFIG_FILE") or "~/.oci/config"
+            )
             profile = os.getenv("OCI_PROFILE", "DEFAULT")
             
             if not os.path.exists(config_file):
@@ -161,7 +161,10 @@ class ImageVectorizer:
             config = oci.config.from_file(file_location=config_file, profile_name=profile)
             
             # OCI Generative AI Clientを初期化
-            region = os.getenv("OCI_REGION", "us-chicago-1")
+            region = os.getenv("OCI_REGION") or os.getenv("OCI_REGION_DEPLOY")
+            if not region:
+                logger.warning("OCI_REGIONまたはOCI_REGION_DEPLOYを設定してください")
+                return
             service_endpoint = f"https://inference.generativeai.{region}.oci.oraclecloud.com"
             
             self.genai_client = oci.generative_ai_inference.GenerativeAiInferenceClient(

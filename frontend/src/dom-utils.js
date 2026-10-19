@@ -245,29 +245,6 @@ export function appendHTML(parentId, html, prepend = false) {
   }
 }
 
-// ========================================
-// パフォーマンス測定関数
-// ========================================
-
-/**
- * パフォーマンス測定
- * @param {string} label - ラベル
- * @param {Function} fn - 測定する関数
- * @returns {Promise<any>} 関数の戻り値
- */
-export async function measurePerformance(label, fn) {
-  const start = performance.now();
-  try {
-    const result = await fn();
-    const end = performance.now();
-    console.log(`[Performance] ${label}: ${(end - start).toFixed(2)}ms`);
-    return result;
-  } catch (error) {
-    const end = performance.now();
-    console.error(`[Performance] ${label} failed after ${(end - start).toFixed(2)}ms:`, error);
-    throw error;
-  }
-}
 
 /**
  * Virtual Scroll用のビューポート計算

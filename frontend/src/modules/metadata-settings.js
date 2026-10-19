@@ -93,7 +93,7 @@ function render() {
         <p class="form-help">完全一致、語句組合せ、除外語、拡張子、優先順位、顧客抽出、年月正規表現、先行解析ページ数、閉じたタグ候補用LLMプロンプトをJSONで管理します。保存すると改訂履歴が作成されます。</p>
         <textarea id="classificationRulesetJson" class="form-input metadata-json-editor" spellcheck="false">${escapeHtml(JSON.stringify(ruleset?.config || {}, null, 2))}</textarea>
         <div class="metadata-settings-actions"><button class="apex-button px-4 py-2" onclick="window.metadataSettingsModule.saveRuleset()"><i class="fas fa-save"></i> ルール改訂を保存</button></div>
-        <div class="rule-test-panel"><label class="form-label" for="ruleTestFilenames">ルールテスト（1行1ファイル）</label><textarea id="ruleTestFilenames" class="form-input" rows="5" placeholder="20240203_森様邸_計画図.pdf\n01.現況-1F 平面図.pdf"></textarea><button class="apex-button-secondary px-3 py-2" onclick="window.metadataSettingsModule.testRules()"><i class="fas fa-vial"></i> テスト</button><pre id="ruleTestResult" class="metadata-test-result"></pre></div>
+        <div class="rule-test-panel"><label class="form-label" for="ruleTestFilenames">ルールテスト（1行1ファイル）</label><textarea id="ruleTestFilenames" class="form-input" rows="5" placeholder="20240203_サンプル邸_計画図.pdf\n01.現況-1F 平面図.pdf"></textarea><button class="apex-button-secondary px-3 py-2" onclick="window.metadataSettingsModule.testRules()"><i class="fas fa-vial"></i> テスト</button><pre id="ruleTestResult" class="metadata-test-result"></pre></div>
       </details>
       <details open><summary>検索候補（AIコンセプト）の抽出・公開設定</summary>
         <p class="form-help">正規化済み本文（ネイティブ抽出・MinerU・OCR）と保存済みVLM文章を入力に使います。抽出失敗は索引公開を止めません。自動公開には信頼度と、確認済み案件グループでの利用数の両方が必要です。</p>

@@ -129,8 +129,6 @@ function getAuthenticatedImageUrl(urlOrBucket, objectName) {
 // ========================================
 
 async function switchTab(tabName, event) {
-  console.log('switchTab called:', tabName);
-  
   // メインタブのアクティブ状態を更新（サブタブを除外）
   const mainTabsContainer = document.querySelector('.apex-tabs:not(#adminSubTabs)');
   if (mainTabsContainer) {
@@ -200,8 +198,6 @@ async function switchTab(tabName, event) {
  * 管理タブのサブタブ切り替え
  */
 async function switchAdminSubTab(subTabName, event) {
-  console.log('switchAdminSubTab called:', subTabName);
-  
   // サブタブボタンのアクティブ状態を更新
   const adminSubTabs = document.getElementById('adminSubTabs');
   adminSubTabs.querySelectorAll('.apex-tab').forEach(tab => {
@@ -242,18 +238,14 @@ async function switchAdminSubTab(subTabName, event) {
   // サブタブに応じた初期化処理
   try {
     if (subTabName === 'retrieval') {
-      console.log('Loading retrieval and indexing settings...');
       utilsShowLoading('検索・索引設定を読み込み中...');
       await Promise.all([loadRetrievalSettings(), loadMetadataSettings()]);
       utilsHideLoading();
     } else if (subTabName === 'settings') {
-      console.log('Loading OCI settings...');
       utilsShowLoading('OCI設定を読み込み中...');
       await Promise.all([loadOciSettings(), loadRerankSettings()]);
       utilsHideLoading();
-      console.log('OCI settings loaded');
     } else if (subTabName === 'database') {
-      console.log('Loading DB connection settings, ADB OCID, and connection info from .env...');
       utilsShowLoading('データベース設定を読み込み中...');
       
       // 既存の警告メッセージをクリア（重複防止）
@@ -326,7 +318,6 @@ async function switchAdminSubTab(subTabName, event) {
         console.warn('DB接続情報取得エラー（スキップ）:', error);
       }
       utilsHideLoading();
-      console.log('DB connection settings, ADB OCID, and connection info loaded');
     }
   } catch (error) {
     // データベースタブの場合は既にエラー処理済みなのでスキップ
@@ -873,213 +864,79 @@ window.refreshDocumentsWithNotification = async function() {
 
 /**
  * OCI Object Storage一覧を表示
- * ※ 移動先: src/modules/document.js
  */
-// src/modules/document.jsのdisplayOciObjectsList関数を使用
 const displayOciObjectsList = (data) => {
   window.ociModule?.displayOciObjectsList?.(data);
 };
 
 /**
  * ページネーション - 前ページ
- * ※ 移動先: src/modules/document.js
  */
-// function handleOciObjectsPrevPage() {
-//   if (ociObjectsPage > 1 && !ociObjectsBatchDeleteLoading) {
-//     ociObjectsPage--;
-//     loadOciObjects();
-//   }
-// }
 const handleOciObjectsPrevPage = () => { window.ociModule?.handleOciObjectsPrevPage?.(); };
 
 /**
  * ページネーション - 次ページ
- * ※ 移動先: src/modules/document.js
  */
-// function handleOciObjectsNextPage() {
-//   if (!ociObjectsBatchDeleteLoading) {
-//     ociObjectsPage++;
-//     loadOciObjects();
-//   }
-// }
 const handleOciObjectsNextPage = () => { window.ociModule?.handleOciObjectsNextPage?.(); };
 
 /**
  * ページネーション - ページジャンプ
- * ※ 移動先: src/modules/document.js
  */
 const handleOciObjectsJumpPage = () => { window.ociModule?.handleOciObjectsJumpPage?.(); };
 
 /**
  * ページ画像化フィルターを設定
- * ※ 移動先: src/modules/document.js
  */
 window.setOciObjectsFilterPageImages = (value) => { window.ociModule?.setFilterPageImages?.(value); };
 
 /**
  * ベクトル化フィルターを設定
- * ※ 移動先: src/modules/document.js
  */
 window.setOciObjectsFilterEmbeddings = (value) => { window.ociModule?.setFilterEmbeddings?.(value); };
 
 /**
  * すべてのフィルターをクリア
- * ※ 移動先: src/modules/document.js
  */
 window.clearOciObjectsFilters = () => { window.ociModule?.clearFilters?.(); };
 
 /**
  * 表示タイプフィルターを設定
- * ※ 移動先: src/modules/document.js
  * @param {string} value - 表示タイプ ('files_only' | 'files_and_images')
  */
-// window.setOciObjectsDisplayType = function(value) {
-//   if (appState.get('ociObjectsBatchDeleteLoading')) return;
-//   appState.set('ociObjectsDisplayType', value);
-//   appState.set('ociObjectsPage', 1);  // フィルター変更時は1ページ目に戻る
-//   appState.set('selectedOciObjects', []);  // 選択状態をクリア
-//   loadOciObjects();
-// }
 window.setOciObjectsDisplayType = (value) => { window.ociModule?.setDisplayType?.(value); };
 
 /**
  * オブジェクト選択状態をトグル（親子関係対応、page_*.png除外）
- * ※ 移動先: src/modules/document.js
  */
-// function toggleOciObjectSelection(objectName) {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// }
 const toggleOciObjectSelection = (objectName) => { window.ociModule?.toggleSelection?.(objectName); };
 
 /**
  * 全選択トグル（ヘッダーチェックボックス）（親子関係対応）
- * ※ 移動先: src/modules/document.js
  */
-// function toggleSelectAllOciObjects(checked) {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// }
 const toggleSelectAllOciObjects = (checked) => { window.ociModule?.toggleSelectAll?.(checked); };
 
 /**
  * すべて選択（親子関係対応、page_*.png除外）
- * ※ 移動先: src/modules/document.js
  */
-// function selectAllOciObjects() {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// }
 const selectAllOciObjects = () => { window.ociModule?.selectAll?.(); };
 
 /**
  * すべて解除
- * ※ 移動先: src/modules/document.js
  */
-// function clearAllOciObjects() {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// }
 const clearAllOciObjects = () => { window.ociModule?.clearAll?.(); };
 
 /**
  * 選択されたオブジェクトを削除
- * 注: この関数はsrc/modules/oci.jsに移行済み。window.deleteSelectedOciObjectsで公開されています。
  */
 
 /**
  * 選択されたOCIオブジェクトをZIPでダウンロード
- * ※ 移動先: src/modules/document.js
  */
-// window.downloadSelectedOciObjects = async function() {
-//   if (selectedOciObjects.length === 0) {
-//     utilsShowToast('ダウンロードするファイルを選択してください', 'warning');
-//     return;
-//   }
-//   
-//   if (ociObjectsBatchDeleteLoading) {
-//     utilsShowToast('処理中です。しばらくお待ちください', 'warning');
-//     return;
-//   }
-//   
-//   // トークンを確認
-//   const token = localStorage.getItem('loginToken');
-//   if (!token && !appState.get('debugMode')) {
-//     utilsShowToast('認証が必要です。ログインしてください', 'warning');
-//     showLoginModal();
-//     return;
-//   }
-//   
-//   try {
-//     ociObjectsBatchDeleteLoading = true;
-//     utilsShowLoading(`${selectedOciObjects.length}件のファイルをZIPに圧縮中...`);
-//     
-//     // リクエストヘッダーを構築
-//     const headers = {
-//       'Content-Type': 'application/json'
-//     };
-//     if (token) {
-//       headers['Authorization'] = `Bearer ${token}`;
-//     }
-//     
-//     const response = await fetch('/ai/api/oci/objects/download', {
-//       method: 'POST',
-//       headers: headers,
-//       body: JSON.stringify({
-//         object_names: selectedOciObjects
-//       })
-//     });
-//     
-//     if (!response.ok) {
-//       // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
-//       if (response.status === 401) {
-//         utilsHideLoading();
-//         ociObjectsBatchDeleteLoading = false;
-//         if (appState.get('requireLogin')) {
-//           forceLogout();
-//         }
-//         throw new Error('無効または期限切れのトークンです');
-//       }
-//       
-//       const errorData = await response.json();
-//       throw new Error(errorData.detail || 'ダウンロードに失敗しました');
-//     }
-//     
-//     // ZIPファイルをダウンロード
-//     const blob = await response.blob();
-//     const url = window.URL.createObjectURL(blob);
-//     const a = document.createElement('a');
-//     a.href = url;
-//     a.download = 'documents.zip';
-//     document.body.appendChild(a);
-//     a.click();
-//     window.URL.revokeObjectURL(url);
-//     document.body.removeChild(a);
-//     
-//     utilsHideLoading();
-//     ociObjectsBatchDeleteLoading = false;
-//     utilsShowToast(`${selectedOciObjects.length}件のファイルをダウンロードしました`, 'success');
-//     
-//     // 一覧を再読み込みして状態を同期
-//     await loadOciObjects();
-//     
-//   } catch (error) {
-//     utilsHideLoading();
-//     ociObjectsBatchDeleteLoading = false;
-//     console.error('ダウンロードエラー:', error);
-//     utilsShowToast(`ダウンロードエラー: ${error.message}`, 'error');
-//     
-//     // エラー時も一覧を再読み込みして状態を同期
-//     await loadOciObjects();
-//   }
-// };
-// src/modules/document.jsのdownloadSelectedOciObjects関数を使用
 window.downloadSelectedOciObjects = () => { window.ociModule?.downloadSelected?.(); };
 
 /**
  * 選択されたOCIオブジェクトをベクトル化してDBに保存
- * ※ 移動先: src/modules/document.js
  */
-// window.vectorizeSelectedOciObjects = async function() {
-//   // ... (省略 - 詳細はsrc/modules/document.jsを参照)
-// };
-// 注: ベクトル化機能は既にdocument.jsモジュールからインポートされています（ociVectorizeSelectedOciObjects）
 
 /**
  * ローディングメッセージを更新（プログレスバー付き、キャンセルボタン対応）
@@ -1184,7 +1041,7 @@ window.cancelCurrentJob = async function(jobId) {
       headers: headers
     });
     
-    // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+    // 認証が必要な環境では、401応答時にセッションを破棄する。
     if (response.status === 401) {
       const requireLogin = appState.get('requireLogin');
       if (requireLogin) {
@@ -1307,7 +1164,7 @@ async function deleteDocument(documentId, filename) {
       headers: headers
     });
     
-    // 401エラーの場合は強制ログアウト（referenceプロジェクトに準拠）
+    // 認証が必要な環境では、401応答時にセッションを破棄する。
     if (response.status === 401) {
       utilsHideLoading();
       const requireLogin = appState.get('requireLogin');
@@ -1406,129 +1263,7 @@ window.handleDropForInput = handleDropForInput;
 // DB管理
 // ========================================
 
-// async function loadDbConnectionSettings() {
-//   try {
-//     const data = await authApiCall('/ai/api/settings/database');
-//     const settings = data.settings;
-    
-//     document.getElementById('dbUser').value = settings.username || '';
-    
-//     // ウォレットアップロード状況を表示
-//     if (settings.wallet_uploaded) {
-//       const walletStatus = document.getElementById('walletStatus');
-//       walletStatus.style.display = 'block';
-//       walletStatus.innerHTML = '<span class="text-green-600">✅ ウォレットアップロード済み</span>';
-      
-//       // 利用可能なDSNを表示
-//       if (settings.available_services && settings.available_services.length > 0) {
-//         const dsnDisplay = document.getElementById('dsnDisplay');
-//         const dsnSelect = document.getElementById('dbDsn');
-//         dsnDisplay.style.display = 'block';
-        
-//         dsnSelect.innerHTML = '<option value="">選択してください</option>';
-//         settings.available_services.forEach(dsn => {
-//           const option = document.createElement('option');
-//           option.value = dsn;
-//           option.textContent = dsn;
-//           if (dsn === settings.dsn) {
-//             option.selected = true;
-//           }
-//           dsnSelect.appendChild(option);
-//         });
-//       }
-//     }
-    
-//     const statusBadge = document.getElementById('dbConnectionStatusBadge');
-//     if (data.is_connected) {
-//       statusBadge.textContent = '接続済み';
-//       statusBadge.style.background = '#10b981';
-//       statusBadge.style.color = '#fff';
-//     } else {
-//       statusBadge.textContent = '未設定';
-//       statusBadge.style.background = '#e2e8f0';
-//       statusBadge.style.color = '#64748b';
-//     }
-    
-//   } catch (error) {
-//     console.error('DB設定読み込みエラー:', error);
-//     // エラーを再スローしてswitchTabでキャッチさせる（トーストは表示しない）
-//     throw error;
-//   }
-// }
 
-// async function refreshDbConnectionFromEnv() {
-//   try {
-//     utilsShowLoading('接続設定を再取得中...');
-    
-//     // 環境変数から情報を取得
-//     const envData = await authApiCall('/ai/api/settings/database/env');
-    
-//     if (!envData.success) {
-//       utilsHideLoading();
-//       utilsShowToast(envData.message, 'error');
-//       return;
-//     }
-    
-//     // ユーザー名を設定
-//     if (envData.username) {
-//       document.getElementById('dbUser').value = envData.username;
-//     }
-    
-//     // Wallet情報を表示
-//     const walletStatus = document.getElementById('walletStatus');
-//     if (envData.wallet_exists) {
-//       walletStatus.style.display = 'block';
-//       walletStatus.innerHTML = '<span class="text-green-600">✅ ウォレット検出済み (' + envData.wallet_location + ')</span>';
-      
-//       // 利用可能なDSNを表示
-//       if (envData.available_services && envData.available_services.length > 0) {
-//         const dsnDisplay = document.getElementById('dsnDisplay');
-//         const dsnSelect = document.getElementById('dbDsn');
-//         dsnDisplay.style.display = 'block';
-        
-//         dsnSelect.innerHTML = '<option value="">選択してください</option>';
-//         envData.available_services.forEach(dsn => {
-//           const option = document.createElement('option');
-//           option.value = dsn;
-//           option.textContent = dsn;
-//           // 環境変数のDSNを選択
-//           if (dsn === envData.dsn) {
-//             option.selected = true;
-//           }
-//           dsnSelect.appendChild(option);
-//         });
-//       }
-//     } else {
-//       walletStatus.style.display = 'block';
-//       // ダウンロードエラーがあれば表示
-//       if (envData.download_error) {
-//         walletStatus.innerHTML = '<span class="text-red-600">❌ Wallet自動ダウンロード失敗: ' + envData.download_error + '</span><br><span class="text-gray-600">手動でZIPファイルをアップロードしてください。</span>';
-//       } else {
-//         walletStatus.innerHTML = '<span class="text-yellow-600">⚠️ Walletが見つかりません。ZIPファイルをアップロードしてください。</span>';
-//       }
-//     }
-    
-//     // ステータスバッジを更新（設定ファイルの有無で判定、実際の接続確認はしない）
-//     const statusBadge = document.getElementById('dbConnectionStatusBadge');
-    
-//     if (envData.username && envData.dsn && envData.wallet_exists) {
-//       statusBadge.textContent = '設定済み';
-//       statusBadge.style.background = '#10b981';
-//       statusBadge.style.color = '#fff';
-//     } else {
-//       statusBadge.textContent = '未設定';
-//       statusBadge.style.background = '#e2e8f0';
-//       statusBadge.style.color = '#64748b';
-//     }
-    
-//     utilsHideLoading();
-//     utilsShowToast('接続設定を再取得しました', 'success');
-    
-//   } catch (error) {
-//     utilsHideLoading();
-//     utilsShowToast(`接続設定再取得エラー: ${error.message}`, 'error');
-//   }
-// }
 
 // グローバルスコープに公開
 window.refreshDbConnectionFromEnv = refreshDbConnectionFromEnv;
@@ -1546,15 +1281,9 @@ window.handleTableDataJumpPage = handleTableDataJumpPage;
 
 /**
  * 強制ログアウト処理（401エラー時に呼び出し）
- * referenceプロジェクトの実装に準拠
  */
 function forceLogout() {
-  console.log('[APP.JS] forceLogout が呼び出されました');
   // セッションを完全にクリア
-  setAuthState(false, null, null);
-  
-  // 後方互換性のためグローバル変数もクリア
-  // appStateをクリア
   setAuthState(false, null, null);
   
   localStorage.removeItem('loginToken');
@@ -1573,7 +1302,6 @@ function forceLogout() {
 
 // ページロード時の初期化
 window.addEventListener('DOMContentLoaded', async () => {
-  // console.log('資料見つかるくん - 初期化開始');
   
   // 設定を読み込む
   await authLoadConfig();
@@ -1608,7 +1336,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   });
   
-  // console.log('資料見つかるくん - 初期化完了');
 });
 
 // ========================================
@@ -1640,7 +1367,6 @@ async function loadAdbOcidOnly() {
     if (data.success && data.ocid) {
       // OCIDのみを表示
       document.getElementById('adbOcid').textContent = data.ocid;
-      console.log('ADB OCIDを読み込みました:', data.ocid);
     }
     // 失敗時は既存の表示（初期化時に取得済みのOCID等）を上書きしない。
     // HTMLの初期値は '-' なので、一度も取得できていなければ '-' のまま。
@@ -1681,8 +1407,6 @@ async function loadDbConnectionInfoFromEnv() {
         // DSN表示エリアを表示
         document.getElementById('dsnDisplay').style.display = 'block';
       }
-      
-      console.log('.envからDB接続情報を読み込みました');
     } else {
       console.warn('DB接続情報の取得失敗:', data.message);
     }
@@ -1699,7 +1423,7 @@ async function getAdbInfo() {
     utilsShowLoading('ADB情報を取得中...');
     
     // バックエンドのADB_OCIDを使用するため、
-    // 環境変数から読み取る（参考コードと同じパターン）
+    // 環境変数を反映したバックエンド設定から読み取る。
     const data = await authApiCall('/ai/api/database/target', {
       method: 'GET'
     });
@@ -1719,8 +1443,6 @@ async function getAdbInfo() {
     // UIを更新
     updateAdbDisplay();
     
-    // 操作結果は表示しない（ユーザー要望により削除）
-    // showAdbOperationResult([...]);
     
     utilsShowToast('ADB情報を取得しました', 'success');
     
@@ -1750,17 +1472,13 @@ async function startAdb() {
     
     if (data.status === 'accepted' || data.status === 'noop') {
       utilsShowToast(data.message, 'success');
-      // 操作結果は表示しない（ユーザー要望により削除）
-      // showAdbOperationResult([...]);
-      
+
       // 少し待ってから情報を再取得
       setTimeout(() => {
         getAdbInfo();
       }, 3000);
     } else {
       utilsShowToast(`エラー: ${data.message}`, 'error');
-      // 操作結果は表示しない（ユーザー要望により削除）
-      // showAdbOperationResult([...]);
     }
     
   } catch (error) {
@@ -1789,17 +1507,13 @@ async function stopAdb() {
     
     if (data.status === 'accepted' || data.status === 'noop') {
       utilsShowToast(data.message, 'success');
-      // 操作結果は表示しない（ユーザー要望により削除）
-      // showAdbOperationResult([...]);
-      
+
       // 少し待ってから情報を再取得
       setTimeout(() => {
         getAdbInfo();
       }, 3000);
     } else {
       utilsShowToast(`エラー: ${data.message}`, 'error');
-      // 操作結果は表示しない（ユーザー要望により削除）
-      // showAdbOperationResult([...]);
     }
     
   } catch (error) {
@@ -1916,11 +1630,9 @@ window.stopAdb = stopAdb;
 // グローバル関数公開（window経由） - AI Assistant関連
 // ========================================
 
-// AI Assistant関数をグローバルスコープに公開（modules/ai.jsで処理済み）
+// AI Assistant関数はmodules/ai.jsが公開する。
 
-// 検索関連（削除済み - window.searchModuleを使用）
-// 注: showSearchImageModal, downloadFileはsearch.jsモジュールに移行済み
-// 下位互換性のため、ファイル末尾でwindow.searchModuleから再エクスポート
+// HTMLから参照する検索関数は、ファイル末尾でwindow.searchModuleから公開する。
 
 // モーダル（utils.jsからインポート済みの関数を再エクスポート）
 window.showConfirmModal = utilsShowConfirmModal;

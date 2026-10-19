@@ -116,7 +116,7 @@ export const appState = new StateManager({
   // API設定
   apiBase: '',
   
-  // 認証関連（referenceプロジェクトに準拠：初期化時にlocalStorageから読み込み）
+  // 認証状態は初期化時にlocalStorageから復元する。
   isLoggedIn: !!localStorage.getItem('loginToken'),
   loginToken: localStorage.getItem('loginToken'),
   loginUser: localStorage.getItem('loginUser'),
@@ -316,14 +316,6 @@ export function setPaginationState(target, updates) {
   appState.setBatch(stateUpdates);
 }
 
-/**
- * 状態をデバッグ出力
- */
-export function debugState() {
-  console.group('🔍 Application State');
-  console.table(appState.getAll());
-  console.groupEnd();
-}
 
 // デフォルトエクスポート
 export default {
@@ -337,6 +329,5 @@ export default {
   addCopilotMessage,
   clearCopilotMessages,
   getPaginationState,
-  setPaginationState,
-  debugState
+  setPaginationState
 };

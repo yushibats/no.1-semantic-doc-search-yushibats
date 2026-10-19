@@ -13,12 +13,29 @@ import subprocess
 import tarfile
 import zipfile
 
-DEFAULT_REPOSITORY = "yushibats/no.1-semantic-doc-search-yushibats"
 STACK_PREFIX = "terraform/stack/"
 
 
 def git(root: Path, *args: str) -> bytes:
     return subprocess.check_output(["git", "-C", str(root), *args])
+
+
+def repository_from_origin(root: Path) -> str:
+    """Return owner/name for a GitHub origin without embedding one account in the tool."""
+    try:
+        origin = subprocess.check_output(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except subprocess.CalledProcessError as error:
+        raise ValueError("Specify --repository OWNER/REPOSITORY or configure a GitHub origin") from error
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?",
+        origin,
+    )
+    if not match:
+        raise ValueError("Git origin is not a supported GitHub URL; specify --repository OWNER/REPOSITORY")
+    return match.group(1)
 
 
 def validate_path(name: str) -> None:
@@ -44,7 +61,8 @@ def write_zip(path: Path, files: dict[str, tuple[bytes, int]]) -> None:
             archive.writestr(info, content)
 
 
-def package(root: Path, output: Path, ref: str, repository: str) -> dict:
+def package(root: Path, output: Path, ref: str, repository: str | None = None) -> dict:
+    repository = repository or repository_from_origin(root)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Repository must be owner/name, without credentials or a URL")
     if git(root, "status", "--porcelain", "--untracked-files=normal").strip():
@@ -91,7 +109,7 @@ def package(root: Path, output: Path, ref: str, repository: str) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref", default="HEAD")
-    parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
+    parser.add_argument("--repository", help="GitHub owner/repository; defaults to the origin remote")
     parser.add_argument("--output", type=Path, default=Path("dist"))
     args = parser.parse_args()
     try:

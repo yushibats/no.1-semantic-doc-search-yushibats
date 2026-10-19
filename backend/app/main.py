@@ -1,6 +1,8 @@
 """
 セマンティック文書検索システム - メインAPIアプリケーション
 """
+# ローカルサービスが環境変数を読む前に.envをロードするため、関連importはロード後に置く。
+# ruff: noqa: E402
 import asyncio
 import hashlib
 import io
@@ -26,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
+import oci
 
 # ログ設定
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
@@ -48,7 +51,7 @@ if env_path.exists():
 
 # モデルのインポート
 from app.models.oci import EnterpriseAISettings, OCISettings, OCISettingsResponse, OCIConnectionTestRequest, OCIConnectionTestResponse
-from app.models.document import DocumentUploadResponse, DocumentInfo, DocumentListResponse, DocumentDeleteRequest, DocumentDeleteResponse
+from app.models.document import DocumentUploadResponse, DocumentInfo, DocumentListResponse, DocumentDeleteResponse
 from app.models.search import SearchQuery, SearchResponse
 from app.models.database import (
     DatabaseSettings,
@@ -71,8 +74,6 @@ from app.models.adb import (
 
 # サービスのインポート
 from app.services.oci_service import oci_service
-# @deprecated: document_processor は非推奨（テキストベース検索は未実装・実装予定なし）
-# from app.services.document_processor import document_processor
 from app.services.database_service import database_service
 from app.services.adb_service import adb_service
 from app.services.ai_copilot import get_copilot_service
@@ -1419,41 +1420,33 @@ async def delete_document(document_id: str):
         bucket_name = os.getenv("OCI_BUCKET")
         file_id = None
         
-        logger.info(f"[DEBUG] object_name取得: {object_name}")
-        logger.info(f"[DEBUG] bucket_name: {bucket_name}")
-        
         if bucket_name:
             try:
-                logger.info(f"[DEBUG] get_file_id_by_object_name呼び出し: bucket={bucket_name}, object_name={object_name}")
-                file_id = await asyncio.to_thread(image_vectorizer.get_file_id_by_object_name, bucket_name, object_name)
-                if file_id:
-                    logger.info(f"[DEBUG] FILE_ID取得成功: FILE_ID={file_id}, object_name={object_name}")
-                else:
-                    logger.warning(f"[DEBUG] FILE_IDが見つかりません（ベクトル化されていない可能性）: object_name={object_name}")
-            except Exception as e:
-                logger.error(f"[DEBUG] FILE_ID取得エラー: {e}", exc_info=True)
+                file_id = await asyncio.to_thread(
+                    image_vectorizer.get_file_id_by_object_name, bucket_name, object_name
+                )
+                if file_id is None:
+                    logger.debug("FILE_INFOレコードなし: object_name=%s", object_name)
+            except Exception as error:
+                logger.error("FILE_INFO検索エラー: %s", error, exc_info=True)
         else:
-            logger.warning(f"[DEBUG] OCI_BUCKET環境変数が設定されていません")
+            logger.warning("OCI_BUCKET環境変数が設定されていません")
         
         # ステップ2: FILE_INFOテーブルのレコード削除（IMG_EMBEDDINGSはCASCADE制約で自動削除）
         if file_id:
             try:
-                logger.info(f"[DEBUG] FILE_INFOレコード削除開始: FILE_ID={file_id}")
-                
                 # FILE_INFOレコードを削除（IMG_EMBEDDINGSはCASCADE制約で自動削除）
                 delete_result = await asyncio.to_thread(database_service.delete_file_info_records, [str(file_id)])
                 
-                logger.info(f"[DEBUG] delete_file_info_records結果: {delete_result}")
-                
                 if not delete_result.get("success"):
-                    logger.warning(f"[DEBUG] FILE_INFOレコード削除失敗: {delete_result.get('message')}")
+                    logger.warning("FILE_INFOレコード削除失敗: %s", delete_result.get("message"))
                 else:
-                    logger.info(f"[DEBUG] FILE_INFOレコード削除成功: {delete_result.get('deleted_count')}件")
-            except Exception as e:
-                # データベース削除に失敗しても続行（ファイルは削除する）
-                logger.error(f"[DEBUG] FILE_INFOレコード削除エラー: {e}", exc_info=True)
-        else:
-            logger.info(f"[DEBUG] FILE_IDが存在しないため、データベース削除をスキップ")
+                    logger.debug(
+                        "FILE_INFOレコード削除成功: %s件", delete_result.get("deleted_count")
+                    )
+            except Exception as error:
+                # Object Storageの削除は継続する。
+                logger.error("FILE_INFOレコード削除エラー: %s", error, exc_info=True)
 
         if bucket_name and profile_repository.schema_ready():
             try:
@@ -2666,7 +2659,7 @@ async def upload_wallet(file: UploadFile = File(...)):
         # 一時ファイル削除
         try:
             temp_file.unlink()
-        except:
+        except OSError:
             pass
         
         if not result["success"]:
@@ -2689,7 +2682,6 @@ async def upload_wallet(file: UploadFile = File(...)):
 # Autonomous Database管理
 # ========================================
 
-import oci
 
 def create_database_client():
     """Database Client を作成"""

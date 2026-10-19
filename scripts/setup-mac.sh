@@ -163,7 +163,7 @@ fi
 current_oracle_dir="$(env_value ORACLE_CLIENT_LIB_DIR)"
 if [ -n "${ORACLE_CLIENT_LIB_DIR:-}" ]; then
   oracle_dir="$ORACLE_CLIENT_LIB_DIR"
-elif [ -n "$current_oracle_dir" ] && [ "$current_oracle_dir" != "/u01/aipoc/instantclient_23_26" ]; then
+elif [ -n "$current_oracle_dir" ]; then
   oracle_dir="$current_oracle_dir"
 else
   oracle_dir="$ROOT_DIR/.local/oracle"
@@ -172,10 +172,10 @@ fi
 mkdir -p "$oracle_dir/network/admin"
 set_env_value ORACLE_CLIENT_LIB_DIR "$oracle_dir"
 
-if [ "$(env_value OCI_CONFIG_FILE)" = "/root/.oci/config" ]; then
+if [ -z "$(env_value OCI_CONFIG_FILE)" ] || [ "$(env_value OCI_CONFIG_FILE)" = "/root/.oci/config" ]; then
   set_env_value OCI_CONFIG_FILE "$HOME/.oci/config"
 fi
-if [ "$(env_value OCI_KEY_FILE)" = "/root/.oci/oci_api_key.pem" ]; then
+if [ -z "$(env_value OCI_KEY_FILE)" ] || [ "$(env_value OCI_KEY_FILE)" = "/root/.oci/oci_api_key.pem" ]; then
   set_env_value OCI_KEY_FILE "$HOME/.oci/oci_api_key.pem"
 fi
 if [ "$env_created" = "true" ]; then

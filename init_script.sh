@@ -883,7 +883,10 @@ fi
 cat > "${INSTALL_DIR}/start_semantic_doc_search_services.sh" << 'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-exec bash /u01/aipoc/no.1-semantic-doc-search/scripts/start-production-services.sh
+readonly INSTALL_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PROJECT_ROOT="${PROJECT_ROOT:-${INSTALL_ROOT}/no.1-semantic-doc-search}"
+export LOG_DIR="${LOG_DIR:-/var/log}"
+exec bash "${PROJECT_ROOT}/scripts/start-production-services.sh"
 EOF
 chmod +x "${INSTALL_DIR}/start_semantic_doc_search_services.sh"
 

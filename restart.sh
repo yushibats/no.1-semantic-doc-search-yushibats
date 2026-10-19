@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_ROOT="/u01/aipoc/no.1-semantic-doc-search"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-${SCRIPT_DIR}}"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
-SERVICE_SCRIPT="/u01/aipoc/start_semantic_doc_search_services.sh"
+SERVICE_SCRIPT="${SERVICE_SCRIPT:-${PROJECT_ROOT}/scripts/start-production-services.sh}"
 PORTS=(8081 5175)
 
 log() {

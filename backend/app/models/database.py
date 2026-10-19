@@ -11,7 +11,7 @@ Oracle Database との接続、クエリ実行、テーブル管理など
 - ページネーション情報の管理
 """
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class DatabaseSettings(BaseModel):

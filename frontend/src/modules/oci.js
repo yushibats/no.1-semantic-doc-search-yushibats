@@ -21,7 +21,7 @@ let ociSettings = {
   user_ocid: '',
   tenancy_ocid: '',
   fingerprint: '',
-  region: 'us-chicago-1',
+  region: '',
   key_content: '',
   bucket_name: '',
   namespace: ''
@@ -33,25 +33,11 @@ let ociAction = null;
 let ociSaveResult = null;
 let ociConnectionTestResult = null;
 
-function ensureRegionOption(region) {
-  const regionSelect = document.getElementById('region');
-  if (!regionSelect || !region) return;
-
-  const hasOption = Array.from(regionSelect.options).some((option) => option.value === region);
-  if (!hasOption) {
-    const option = document.createElement('option');
-    option.value = region;
-    option.textContent = region;
-    regionSelect.appendChild(option);
-  }
-}
-
 function syncRegionInput(region) {
-  const normalizedRegion = region || 'us-chicago-1';
-  ensureRegionOption(normalizedRegion);
-  const regionSelect = document.getElementById('region');
-  if (regionSelect) {
-    regionSelect.value = normalizedRegion;
+  const normalizedRegion = region || '';
+  const regionInput = document.getElementById('region');
+  if (regionInput) {
+    regionInput.value = normalizedRegion;
   }
   return normalizedRegion;
 }

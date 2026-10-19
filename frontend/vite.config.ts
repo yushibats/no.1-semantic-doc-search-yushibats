@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   base: '/ai/',  // 本番環境では/aiパスでホストされる
   server: {
-    port: 5175,  // no.1-semantic-doc-searchは5175ポートを使用
+    port: 5175,
     proxy: {
       '/ai/api': {
         target: process.env.VITE_PROXY_TARGET || 'http://localhost:8081',

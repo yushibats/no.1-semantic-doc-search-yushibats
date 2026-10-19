@@ -1276,7 +1276,7 @@ class OracleRagRepository:
             connection.commit()
 
     def unreferenced_serving_assets(self, document_id: str) -> list[str]:
-        # ponytail: retain revisioned assets until a measured storage problem justifies GC.
+        # Revisioned assets remain available for rollback; garbage collection is explicit.
         return []
 
     def record_search_audit(self, *, trace_id: str, query_hash: str, user_hash: str | None,

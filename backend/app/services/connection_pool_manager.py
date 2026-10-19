@@ -171,10 +171,10 @@ class ConnectionPoolManager:
         
         # 接続プール作成
         try:
-            logger.info(f"接続プール作成中...")
+            logger.info("接続プール作成中...")
             logger.info(f"  user={username}, dsn={dsn}")
             logger.info(f"  min={self.POOL_MIN}, max={self.POOL_MAX}, increment={self.POOL_INCREMENT}")
-            logger.info(f"  getmode=oracledb.POOL_GETMODE_WAIT")
+            logger.info("  getmode=oracledb.POOL_GETMODE_WAIT")
             logger.info(f"  wait_timeout={self.GET_CONNECTION_TIMEOUT}, tcp_connect_timeout={self.TCP_CONNECT_TIMEOUT}")
             
             start_time = time.time()
@@ -353,7 +353,7 @@ class ConnectionPoolManager:
                 if connection:
                     try:
                         connection.close()
-                    except:
+                    except Exception:
                         pass
                     connection = None
                 
@@ -410,7 +410,6 @@ class ConnectionPoolManager:
             if timeout is not None:
                 # タイムアウト付きクローズの実装
                 import threading
-                import signal
                 
                 def close_with_timeout():
                     try:

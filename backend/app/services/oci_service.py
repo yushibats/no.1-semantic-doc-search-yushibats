@@ -36,9 +36,9 @@ elif find_dotenv():
     load_dotenv(find_dotenv())
 
 # 環境変数から設定ファイルのパスを取得、デフォルトは ~/.oci/config
-OCI_CONFIG_FILE = os.environ.get("OCI_CONFIG_FILE", os.path.expanduser("~/.oci/config"))
+OCI_CONFIG_FILE = os.environ.get("OCI_CONFIG_FILE") or os.path.expanduser("~/.oci/config")
 # キーファイルのパスは設定ファイルと同じディレクトリ内の oci_api_key.pem をデフォルトとする
-OCI_KEY_FILE = os.environ.get("OCI_KEY_FILE", os.path.join(os.path.dirname(OCI_CONFIG_FILE), "oci_api_key.pem"))
+OCI_KEY_FILE = os.environ.get("OCI_KEY_FILE") or os.path.join(os.path.dirname(OCI_CONFIG_FILE), "oci_api_key.pem")
 
 # レート制限対応のリトライ設定
 OCI_API_MAX_RETRIES = int(os.environ.get("OCI_API_MAX_RETRIES", "5"))

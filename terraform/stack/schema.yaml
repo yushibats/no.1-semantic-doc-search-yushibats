@@ -60,14 +60,10 @@ variables:
 
   deploy_region:
     title: "Deploy Region"
-    type: enum
+    type: oci:identity:region:name
     required: true
     visible: true
-    description: "Select the target OCI region for this deployment"
-    enum:
-      - "ap-osaka-1"
-      - "ap-tokyo-1"
-    default: "ap-osaka-1"
+    description: "Select a subscribed OCI region for this deployment"
 
   compartment_ocid:
     type: oci:identity:compartment:id

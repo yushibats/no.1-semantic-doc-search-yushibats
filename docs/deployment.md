@@ -14,7 +14,7 @@
 
 Compute、ADB、ストレージ、AIの利用料金が発生します。初期値はCompute 2 OCPU / 16 GB、
 ブートディスク100 GB、ADB 2 ECPU / 1 TBです。作成前に値を確認してください。
-デプロイ先は大阪または東京を選択できますが、AIモデルの利用リージョンは別に設定します。
+デプロイ先にはテナンシで利用可能なOCIリージョンを選択します。AIモデルの提供リージョンは別途確認して設定します。
 
 ## 権限とネットワーク
 
@@ -36,7 +36,7 @@ ComputeからGitHub、OSパッケージ、Python/npmレジストリ、利用す�
 
 [Releases](https://github.com/yushibats/no.1-semantic-doc-search-yushibats/releases)から、
 この手順に対応した`semantic-doc-search-stack.zip`と`SHA256SUMS`を取得します。
-旧`v1.13.1.zip`はこの稼働版とは異なります。
+リリースノートと`RELEASE.json`で、導入対象のコミットを確認してください。
 
 まだ新しいリリースがない場合は、GitHubに存在する整備済みコミットをチェックアウトし、次を実行します。
 

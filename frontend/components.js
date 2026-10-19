@@ -460,7 +460,6 @@ function openModal(modalId) {
   const modal = document.getElementById(modalId);
   if (modal) {
     modal.showModal();
-    console.log(`モーダルを開きました: ${modalId}`);
   } else {
     console.error(`モーダルが見つかりません: ${modalId}`);
   }
@@ -477,7 +476,6 @@ function closeModal(modalId) {
   const modal = document.getElementById(modalId);
   if (modal) {
     modal.close();
-    console.log(`モーダルを閉じました: ${modalId}`);
   } else {
     console.error(`モーダルが見つかりません: ${modalId}`);
   }
@@ -864,8 +862,6 @@ function showModal({
     }
   };
   document.addEventListener('keydown', handleEsc);
-
-  console.log(`確認モーダルを表示: ${title}`);
 }
 
 // ========================================
@@ -951,7 +947,6 @@ function toggleCardCollapse(contentId) {
   if (content && toggle) {
     const isHidden = content.classList.toggle('hidden');
     toggle.querySelector('svg').classList.toggle('rotate-180', isHidden);
-    console.log(`カードを${isHidden ? '折りたたみ' : '展開'}ました: ${contentId}`);
   }
 }
 
@@ -1112,8 +1107,6 @@ function showToast(message, type = 'info', duration = 4000) {
   `;
 
   container.appendChild(toast);
-  console.log(`トースト通知を表示: [${type}] ${message}`);
-
   // 自動削除
   if (duration > 0) {
     setTimeout(() => {
@@ -1365,8 +1358,6 @@ if (typeof window !== 'undefined') {
     renderBadge,
     renderAlert
   };
-  
-  console.log('統一UIコンポーネントライブラリが読み込まれました');
 }
 
 // Node.js環境用のエクスポート
